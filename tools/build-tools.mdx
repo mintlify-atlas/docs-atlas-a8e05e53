@@ -1,0 +1,98 @@
+---
+title: "Build tools, Gradle, and VS Code extensions"
+description: "How Spectrum uses Gradle, Spotless, SpotBugs, and Lombok in the 2026 build pipeline, plus the recommended VS Code extensions for FRC development."
+---
+
+The 2026 Spectrum codebase uses Gradle as its build system, with Spotless for automatic code formatting, SpotBugs for static analysis, and Lombok for boilerplate reduction. These tools run automatically on every build, keeping code quality consistent across all contributors.
+
+## Gradle
+
+Gradle is the build system used by WPILib for all FRC Java projects. It handles compilation, dependency resolution, and deployment to the RoboRIO.
+
+```bash Common Gradle tasks
+# Build the project (also runs Spotless formatting)
+./gradlew build
+
+# Clean build artifacts and rebuild from scratch
+./gradlew clean build
+
+# Deploy code to the connected robot
+./gradlew deploy
+
+# Run SpotBugs static analysis
+./gradlew spotbugsMain
+
+# Check Spotless formatting without applying fixes
+./gradlew spotlessCheck
+```
+
+<Tip>
+  If you see strange Java errors that don't match your code, run `./gradlew clean` to clear cached build artifacts, then rebuild. You can also use `Ctrl+Shift+P` → `Java: Clean Java Language Server Workspace` in VS Code.
+</Tip>
+
+## Spotless
+
+Spotless automatically formats all Java source files to the AOSP (Android Open Source Project) code style every time the project is built. You don't need to manually format code — just build and Spotless handles it.
+
+- Enforces 4-space indentation
+- Applies consistent brace and import ordering
+- Runs on every `./gradlew build` call
+
+<Note>
+  If a build fails with a Spotless formatting error, run `./gradlew spotlessApply` to auto-fix all formatting issues, then rebuild.
+</Note>
+
+## SpotBugs
+
+SpotBugs performs static analysis on compiled bytecode to catch common bugs before they reach the robot.
+
+- Catches mistakes like using `=` instead of `==` in conditionals
+- Identifies unreachable code and incorrect method calls
+- Currently configured for a low report level (fewer false positives)
+- SpotBugs HTML reports can be opened with the **Open in Browser** VS Code extension
+
+## Lombok
+
+Project Lombok uses Java annotations to generate boilerplate code at compile time, keeping source files concise.
+
+```java java
+import lombok.*;
+
+public class LauncherConfig {
+    @Getter @Setter private double velocityRPM = 3000;
+    @Getter private final String name;
+
+    @RequiredArgsConstructor
+    public LauncherConfig(String name) {
+        this.name = name;
+    }
+}
+```
+
+The `@Getter` annotation generates a `getVelocityRPM()` method; `@Setter` generates `setVelocityRPM(double)`. No manual getter/setter code needed. See [Class and Method Patterns](/conventions/class-and-method-patterns) for full Lombok usage.
+
+## VS Code extensions
+
+<AccordionGroup>
+  <Accordion title="Essential extensions">
+    - **Language Support for Java™ by Red Hat** (`redhat.java`) — IntelliSense, code navigation, refactoring. Use "Clean Java Language Server Workspace" when seeing false errors.
+    - **Error Lens** (`usernamehw.errorlens`) — Highlights errors inline in the editor
+    - **WPILib** — Integrated WPILib commands, simulation launcher, and deploy
+  </Accordion>
+  <Accordion title="Git and collaboration">
+    - **GitLens** (`eamodio.gitlens`) — `git blame`, commit history, and diff views inline
+    - **GitHub Pull Requests and Issues** — Manage PRs and issues without leaving VS Code
+    - **Git Config User Profiles** — Multiple team members can commit from one machine under their own names
+    - **Live Share** (`ms-vsliveshare.vsliveshare`) — Real-time pair programming
+  </Accordion>
+  <Accordion title="AI assistance">
+    - **GitHub Copilot** — Inline code completion suggestions (press Tab to accept)
+    - **Copilot Chat** — Conversational AI assistant for code questions and generation
+    - **IntelliCode** (`VisualStudioExptTeam.vscodeintellicode`) — Context-aware completions
+  </Accordion>
+  <Accordion title="Productivity">
+    - **Spell Right** (`Ban.spellright`) — Spell checker for comments and strings
+    - **Open in Browser** — Open SpotBugs HTML output directly from VS Code
+    - **Ctrl+Shift+P** → type `sim` to launch WPILib simulation from any file
+  </Accordion>
+</AccordionGroup>

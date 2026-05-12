@@ -1,0 +1,84 @@
+---
+title: "Phoenix Tuner X: configuring CTRE devices"
+description: "How to use Phoenix Tuner X to configure TalonFX motor controllers, reset swerve CANcoder offsets, update firmware, and verify CAN IDs on the 2026 robot."
+---
+
+Phoenix Tuner X is CTRE's all-in-one configuration and diagnostics application for TalonFX motors, CANcoders, Pigeon IMUs, and CANivores. It connects to the robot over USB or the robot network and lets you configure devices, run control loops live, and update firmware — all without touching robot code.
+
+## Connecting to the robot
+
+1. Connect your laptop to the robot's network (USB or Wi-Fi via radio)
+2. Open Phoenix Tuner X
+3. Click **Connect** and select your robot (RoboRIO or CANivore)
+4. All detected CAN devices appear in the device list
+
+## CAN ID and device setup
+
+Every device on a CAN bus must have a **unique CAN ID** across all device types (TalonFX, CANcoder, Pigeon, etc.) on that bus. Duplicate IDs cause unpredictable behavior.
+
+When setting up a new device:
+- Assign a CAN ID that matches the value in the corresponding subsystem's config class
+- Set a human-readable **Name** matching the subsystem (e.g., `"LauncherLeader"`, `"SwerveFL_Drive"`)
+- Verify the **License** is set to the current season under the team's CTRE account
+
+<Warning>
+  If a TalonFX or CANcoder is not licensed for the current season, it will operate in a limited mode. Always verify licenses at the start of each build season.
+</Warning>
+
+## Resetting swerve CANcoder offsets
+
+Correct swerve wheel alignment is critical for accurate field-relative driving. After any mechanical change to the swerve modules, reset the CANcoder offsets:
+
+<Steps>
+  <Step title="Physically align the wheels">
+    Place swerve aligners on the robot with the bevel gear pointed **toward the inside** of the robot frame on all four corners.
+  </Step>
+  <Step title="Read the absolute position in Phoenix Tuner X">
+    Select each swerve module's CANcoder in Phoenix Tuner X. Read the **Absolute Position (No Offset)** value — this is the raw encoder reading with all wheels aligned straight.
+  </Step>
+  <Step title="Update the offset in robot code">
+    Enter the negative of the raw value as the encoder offset in the corresponding swerve configuration. If the sign appears incorrect after deployment, flip it.
+
+    ```java java
+    // Example swerve module CANcoder offset (in the swerve config)
+    steerEncoderOffset = -0.412; // degrees or rotations per your config
+    ```
+  </Step>
+  <Step title="Deploy and verify">
+    Deploy the updated code and perform a systems check. The CANcoder's reported absolute position should read approximately `0.0` (within ±0.01) when wheels are aligned.
+
+    ```
+    ✔ 0.0000024  ← Good
+    ✖ 0.3445553  ← Needs correction
+    ```
+  </Step>
+</Steps>
+
+## Live motor control and diagnostics
+
+The **Controls** tab in Phoenix Tuner X lets you command motors directly without running robot code — useful for verifying wiring and tuning PID gains:
+
+- **Duty Cycle Out**: Open-loop percent output (-1.0 to 1.0)
+- **Voltage Out**: Open-loop voltage command
+- **Position / Velocity**: Closed-loop setpoint with live gain tuning
+- **Plot**: Real-time graphs of position, velocity, current, voltage, and temperature
+
+## Updating firmware
+
+CTRE releases firmware updates for TalonFX, CANcoder, Pigeon 2.0, and CANivore each season. Keep firmware current for compatibility with the Phoenix 6 library version used in the project.
+
+<Steps>
+  <Step title="Select the device in Phoenix Tuner X">
+    Navigate to the device in the device list.
+  </Step>
+  <Step title="Click Update Firmware">
+    Phoenix Tuner X will download and flash the latest firmware automatically. The device will reboot.
+  </Step>
+  <Step title="Verify the firmware version">
+    Confirm the firmware version matches what the Phoenix 6 library expects. Mismatched firmware can cause API errors at runtime.
+  </Step>
+</Steps>
+
+<Tip>
+  Update the CANivore firmware as well — it acts as the CAN bridge and must be compatible with the TalonFX firmware version.
+</Tip>

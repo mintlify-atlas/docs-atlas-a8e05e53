@@ -1,0 +1,135 @@
+---
+title: "Swerve drive subsystem and field navigation"
+description: "How Spectrum's swerve drivetrain uses CTRE Phoenix 6 Krakens, zone-based field positioning triggers, and vision-fused odometry for the REBUILT game."
+---
+
+The `Swerve` subsystem extends CTRE's `SwerveDrivetrain` class and integrates field-centric driving, autonomous path following, zone-based triggers, and pose estimation into a single command-based subsystem. Each of the four swerve modules is powered by a Kraken X60 FOC drive motor and a Kraken X60 FOC steer motor, communicating over the CANIVORE bus via Phoenix 6.
+
+## Hardware and initialization
+
+`Swerve` is constructed with a `SwerveConfig` that carries drivetrain constants, module positions, and PID gains. During construction the robot seeds its pose to the field center, configures PathPlanner, and starts a high-rate simulation notifier when running in simulation.
+
+```java Swerve.java
+public Swerve(SwerveConfig config) {
+    super(
+            TalonFX::new,
+            TalonFX::new,
+            CANcoder::new,
+            config.getDrivetrainConstants(),
+            250.0,
+            MapleSimSwerveDrivetrain.regulateModuleConstantsForSimulation(config.getModules()));
+    ...
+    configurePathPlanner();
+}
+```
+
+The simulation thread runs at a faster rate than the main robot loop so that PID gains behave correctly in `MapleSimSwerveDrivetrain`.
+
+## Drive requests
+
+`SwerveStates` pre-configures four CTRE swerve requests that are reused across all commands:
+
+| Request | Usage |
+|---|---|
+| `SwerveRequest.FieldCentric` | Normal field-centric teleop driving |
+| `SwerveRequest.RobotCentric` | Robot-centric / FPV driving |
+| `SwerveRequest.SwerveDriveBrake` | X-brake lock during launch |
+| `SwerveRequest.FieldCentricFacingAngle` | Aim-assist rotation toward a target |
+
+```java SwerveStates.java
+private static final SwerveRequest.FieldCentricFacingAngle FIELD_CENTRIC_FACING_ANGLE =
+        new SwerveRequest.FieldCentricFacingAngle()
+                .withDriveRequestType(DriveRequestType.Velocity)
+                .withSteerRequestType(SteerRequestType.Position)
+                .withMaxAbsRotationalRate(config.getMaxAngularRate())
+                .withHeadingPID(
+                        config.getKPRotationController(),
+                        config.getKIRotationController(),
+                        config.getKDRotationController());
+```
+
+## Driver control bindings
+
+The default command is `pilotDrive`, which maps the left stick to translation and the right stick to rotation. When the robot is in a `LAUNCH_WITH_SQUEEZE`, `LAUNCH_WITHOUT_SQUEEZE`, or `TRACK_TARGET` state the swerve automatically switches to `pilotAimAtTarget`, rotating the chassis toward the shot angle calculated by `ShotCalculator`. Alliance color is accounted for — the blue-alliance version adds 180° to the drive angle.
+
+```java SwerveStates.java
+(launching.or(launchPreping))
+        .and(isRed, Util.autoMode.not())
+        .whileTrue(log(pilotAimAtTargetRed()));
+(launching.or(launchPreping))
+        .and(isRed.not(), Util.autoMode.not())
+        .whileTrue(log(pilotAimAtTargetBlue()));
+launching.and(Robot.getPilot().RB).whileTrue(log(xBrake()));
+```
+
+Cardinal reorientation is available on the D-pad (`upReorient`, `leftReorient`, `downReorient`, `rightReorient`) and snaps the gyro heading without affecting translation.
+
+## Zone-based field positioning triggers
+
+`Swerve` exposes two high-level zone `Trigger`s used by `RobotStates` to gate mechanism behavior:
+
+<AccordionGroup>
+  <Accordion title="inNeutralZone()">
+    Returns `true` when the robot is inside the neutral (center) zone of the REBUILT field. The zone is a `Rectangle2d` centered at mid-field with a depth of 283 in and length of 317.7 in.
+
+    ```java Swerve.java
+    public Trigger inNeutralZone() {
+        final double fieldLengthMeters = Units.feetToMeters(54.0);
+        final double fieldWidthMeters = Units.feetToMeters(27.0);
+        final double neutralDepthMeters = Units.inchesToMeters(283.0);
+        final double neutralLengthMeters = Units.inchesToMeters(317.7);
+        final double centerX = fieldLengthMeters / 2.0;
+        final double centerY = fieldWidthMeters / 2.0;
+        Rectangle2d neutralZone = new Rectangle2d(
+                new Translation2d(centerX - neutralDepthMeters / 2.0,
+                                  centerY - neutralLengthMeters / 2.0),
+                new Translation2d(centerX + neutralDepthMeters / 2.0,
+                                  centerY + neutralLengthMeters / 2.0));
+        return new Trigger(() -> neutralZone.contains(
+                new Translation2d(getRobotPose().getX(), getRobotPose().getY())));
+    }
+    ```
+  </Accordion>
+  <Accordion title="inEnemyAllianceZone()">
+    Returns `true` when the alliance-flipped X coordinate of the robot is inside the opponent's alliance zone (the last 180 in of the field). `FieldHelpers.flipXifRed` handles the Blue/Red mirroring automatically.
+
+    ```java Swerve.java
+    public Trigger inEnemyAllianceZone() {
+        final double allianceDepthMeters = Units.inchesToMeters(180.0);
+        ...
+        return new Trigger(() -> enemyAllianceZone.contains(
+                new Translation2d(FieldHelpers.flipXifRed(getRobotPose().getX()),
+                                  getRobotPose().getY())));
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+`SwerveStates` exposes these as public static helpers so `RobotStates` can compose them without depending directly on the `Swerve` instance:
+
+```java SwerveStates.java
+public static Trigger robotInNeutralZone() {
+    return swerve.inNeutralZone();
+}
+
+public static Trigger robotInEnemyZone() {
+    return swerve.inEnemyAllianceZone();
+}
+```
+
+## Pose estimation and odometry
+
+Pose is read from `getState().Pose` (provided by the Phoenix `SwerveDrivetrain` base class), which fuses wheel odometry with vision measurements added externally by the Vision subsystem. In simulation the pose comes from the `MapleSimSwerveDrivetrain` physics model instead. `getPoseAtTimestamp` uses Phoenix's built-in pose buffer to interpolate historical poses for latency-compensated vision updates.
+
+## PathPlanner integration
+
+`AutoBuilder.configure` registers the swerve as the path-following subsystem. Translation is controlled by a `PPHolonomicDriveController` with separate PID constants (P=4 for translation, P=3 for rotation). The `AutoRequest` uses `DriveRequestType.Velocity` and desaturates wheel speeds to handle high-speed autonomous segments.
+
+<CardGroup cols={2}>
+  <Card title="SwerveStates source" icon="code" href="https://github.com/spectrum3847/2026-Spectrum/blob/main/src/main/java/frc/robot/swerve/SwerveStates.java">
+    Trigger bindings and all drive command factories.
+  </Card>
+  <Card title="Swerve source" icon="cpu" href="https://github.com/spectrum3847/2026-Spectrum/blob/main/src/main/java/frc/robot/swerve/Swerve.java">
+    Zone triggers, pose methods, and PathPlanner configuration.
+  </Card>
+</CardGroup>

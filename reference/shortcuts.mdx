@@ -1,0 +1,71 @@
+---
+title: "VS Code keyboard shortcuts for FRC development"
+description: "Essential VS Code shortcuts for Spectrum 3847 programmers — navigation, multi-cursor editing, build and deploy commands, and Git integration shortcuts."
+---
+
+Knowing your editor shortcuts dramatically speeds up everyday coding tasks. This page covers the VS Code shortcuts most useful for FRC Java development with the 2026 Spectrum codebase.
+
+## Navigation shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl+P` | Quick open — search and open any file by name |
+| `Ctrl+Click` or `F12` | Go to Definition — jump to where a class/method is defined |
+| `Alt+Shift+F12` | Find All References — see every use of a symbol |
+| `F2` | Refactor Rename — rename a symbol everywhere in the project |
+| `Ctrl+Shift+P` | Command Palette — run any VS Code or WPILib command |
+| `Ctrl+\`` | Toggle the integrated terminal |
+
+## Code editing shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl+/` | Toggle line comment for selected lines |
+| `Shift+Alt+Down` | Duplicate current line or selection |
+| `Ctrl+Alt+Up/Down` | Add cursor above/below current position |
+| `Alt+Click` | Place cursor at clicked location (multi-cursor) |
+| `Middle Click+Drag` | Column selection across lines |
+| `Ctrl+D` | Select next occurrence of selected text |
+| `Ctrl+Shift+L` | Select all occurrences of selected text |
+| `Ctrl+U` | Deselect last added occurrence (undo `Ctrl+D`) |
+| `Alt+Shift+Arrow` | Expand/shrink selection by word → line → block |
+
+## AI assistance shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Tab` | Accept a GitHub Copilot inline suggestion |
+| `Ctrl+Right` | Accept the next word of a Copilot suggestion |
+| `Ctrl+Shift+I` | Open Copilot Chat panel |
+
+## Build, simulate, and deploy
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl+Shift+P` → type `sim` | Launch WPILib: Simulate Robot Code |
+| `Shift+F5` | Deploy code to the robot |
+| `F5` | Start debugging/simulation |
+| Terminal: `./gradlew build` | Full build with Spotless formatting |
+| Terminal: `./gradlew deploy` | Build and deploy to the RoboRIO |
+| Terminal: `./gradlew clean` | Clear cached build artifacts |
+
+## Git and GitHub shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl+Shift+G` | Open Source Control panel (stage, commit, push) |
+| `Ctrl+Shift+P` → `Git: Pull` | Pull latest changes from remote |
+| `Ctrl+Shift+P` → `Git: Create Branch` | Create a new feature branch |
+
+<Tip>
+  Use `Ctrl+Shift+P` → `Java: Clean Java Language Server Workspace` when you see red errors that don't match actual code issues — this rebuilds the Java language server's index.
+</Tip>
+
+## Markdown preview
+
+When editing documentation files (`.md`):
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl+Shift+V` | Preview Markdown rendered output |
+| `Ctrl+K V` | Open Markdown preview to the side |

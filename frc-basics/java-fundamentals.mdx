@@ -1,0 +1,353 @@
+---
+title: "Java fundamentals for FRC robot programming"
+description: "Learn the Java building blocks used in FRC: variables, operators, conditionals, loops, arrays, enums, classes, and objects — with robot-specific examples."
+---
+
+Java is the primary language for FRC robot programming via WPILib, and understanding its core constructs is essential before working with subsystems and commands. Unlike Python, Java is statically typed and requires semicolons at the end of every statement — the compiler will reject code that violates either of these rules. This page covers the fundamental language features you'll encounter repeatedly in the Spectrum 3847 codebase.
+
+<AccordionGroup>
+
+  <Accordion title="Variables and data types">
+
+Every variable in Java must be declared with an explicit type before it can be used. The most common types in FRC code are:
+
+| Type | Description | FRC example |
+|------|-------------|-------------|
+| `int` | Whole numbers | Motor port numbers, sensor counts |
+| `double` | Decimal numbers | Motor speeds (`0.75`), distances in meters |
+| `boolean` | `true` or `false` | Sensor state, button pressed |
+| `String` | Text | Subsystem names, telemetry keys |
+
+```java
+int intakeMotorPort = 5;
+double launcherSpeed = 0.85;
+boolean isFuelLoaded = false;
+String subsystemName = "FuelIntake";
+```
+
+Once a variable is declared, its type cannot change:
+
+```java
+int a = 5;
+a = 3;           // OK — same type
+a = "Spectrum";  // ERROR — type mismatch
+```
+
+The `final` keyword prevents reassignment after initialization. Use it for hardware port constants and config values that should never change:
+
+```java
+final int LAUNCHER_PORT = 10;
+```
+
+  </Accordion>
+
+  <Accordion title="Arithmetic and compound operators">
+
+Java supports the standard binary arithmetic operators. When both operands are `int`, division truncates the decimal portion:
+
+```java
+int a = 5;
+int b = 2;
+
+int sum  = a + b;  // 7
+int diff = a - b;  // 3
+int prod = a * b;  // 10
+int quot = a / b;  // 2  (not 2.5 — truncated)
+int rem  = a % b;  // 1  (modulus / remainder)
+```
+
+<Note>
+Use `double` when you need fractional results. `5.0 / 2` evaluates to `2.5`, while `5 / 2` evaluates to `2`.
+</Note>
+
+**Compound assignment operators** are shorthand for updating a variable in place:
+
+```java
+double speed = 0.5;
+speed += 0.1;  // speed = 0.6
+speed -= 0.2;  // speed = 0.4
+speed *= 2.0;  // speed = 0.8
+speed /= 4.0;  // speed = 0.2
+```
+
+The `Math` class provides additional operations. For example, `Math.abs()` is commonly used when checking whether a motor output magnitude crosses a threshold:
+
+```java
+double output = -0.75;
+double magnitude = Math.abs(output); // 0.75
+double clamped = Math.min(magnitude, 1.0); // never exceeds 1.0
+```
+
+  </Accordion>
+
+  <Accordion title="Logic operators and conditionals">
+
+Comparison operators produce a `boolean` result and are used inside `if` conditions and Trigger definitions:
+
+```java
+5 > 4   // true
+5 >= 6  // false
+5 != 4  // true
+5 == 5  // true
+```
+
+Logical operators combine multiple boolean expressions:
+
+| Operator | Meaning | Example |
+|----------|---------|---------|
+| `&&` | AND — both must be true | `isFuelLoaded && launcherReady` |
+| `\|\|` | OR — either can be true | `intaking \|\| ejecting` |
+| `!` | NOT — inverts the value | `!sensorTripped` |
+
+**Conditionals** branch execution based on a boolean expression:
+
+```java
+// One-way: only runs if condition is true
+if (isFuelLoaded) {
+    launcher.spinUp();
+}
+
+// Two-way: runs one branch or the other
+if (speed > 0.9) {
+    System.out.println("At speed");
+} else {
+    System.out.println("Ramping up");
+}
+
+// Multi-way: checks several conditions in sequence
+if (state == State.INTAKE_FUEL) {
+    intake.run();
+} else if (state == State.LAUNCH_WITH_SQUEEZE) {
+    launcher.fire();
+} else {
+    intake.stop();
+}
+```
+
+<Tip>
+In FRC, `if/else` is used heavily inside `periodic()` methods and command factories to choose behavior based on sensor readings, robot state, or configuration values.
+</Tip>
+
+  </Accordion>
+
+  <Accordion title="Strings and string operations">
+
+`String` is not a primitive type — it is a class — but it behaves like one for everyday use. Strings are enclosed in double quotes and support several built-in methods:
+
+```java
+String subsystem = "FuelIntake";
+
+// Concatenation
+String log = "Subsystem: " + subsystem; // "Subsystem: FuelIntake"
+
+// Length
+int len = subsystem.length(); // 10
+
+// Character access
+char first = subsystem.charAt(0); // 'F'
+
+// Substring
+String sub = subsystem.substring(0, 4); // "Fuel"
+
+// Case-insensitive comparison
+boolean match = subsystem.toLowerCase().equals("fuelintake"); // true
+
+// Equality (always use .equals(), not ==, for strings)
+String s1 = "Spectrum";
+String s2 = "Spectrum";
+boolean same = s1.equals(s2); // true
+```
+
+<Warning>
+Never compare strings with `==` in Java. Use `.equals()` instead. The `==` operator checks object identity, not value equality, and will produce incorrect results for string variables.
+</Warning>
+
+  </Accordion>
+
+  <Accordion title="Loops">
+
+Loops repeat a block of code. Java provides three varieties:
+
+**For loop** — use when the number of iterations is known:
+
+```java
+// Spin up 3 launchers indexed 0, 1, 2
+for (int i = 0; i < 3; i++) {
+    System.out.println("Spinning up launcher " + i);
+}
+```
+
+**Enhanced for loop** — iterates over every element in an array or collection:
+
+```java
+int[] ports = {10, 11, 12};
+for (int port : ports) {
+    System.out.println("Motor port: " + port);
+}
+```
+
+**While loop** — use when the number of iterations is not known in advance:
+
+```java
+boolean targetFound = false;
+while (!targetFound) {
+    targetFound = visionSensor.hasTarget();
+}
+```
+
+**Variable scope inside vs. outside a loop:**
+
+```java
+int total = 0;           // survives across iterations
+for (int i = 0; i < 4; i++) {
+    int step = i * 2;   // reset each iteration — not accessible outside
+    total += step;
+}
+// total is accessible here; step is not
+```
+
+<Note>
+In FRC command-based code, traditional `while` loops are rarely used for robot control because the command scheduler handles periodic execution. See [Applying Java concepts to FRC robot code](/frc-basics/applied-to-frc) for details.
+</Note>
+
+  </Accordion>
+
+  <Accordion title="Arrays and enums">
+
+**Arrays** store multiple values of the same type at fixed indices (starting at `0`):
+
+```java
+// Declare and initialize
+int[] motorPorts = {10, 11, 12, 13};
+
+// Access by index
+int firstPort = motorPorts[0]; // 10
+
+// Declare first, assign later
+double[] speeds = new double[3];
+speeds[0] = 0.5;
+speeds[1] = 0.75;
+speeds[2] = 1.0;
+```
+
+<Warning>
+Accessing an index outside the array bounds throws `ArrayIndexOutOfBoundsException`. Always check array length before accessing elements by index.
+</Warning>
+
+**Enums** define a fixed set of named constants — ideal for robot states. The Spectrum 2026 robot uses an enum to represent every possible operating state:
+
+```java
+public enum State {
+    IDLE,
+    INTAKE_FUEL,
+    TRACK_TARGET,
+    LAUNCH_WITH_SQUEEZE,
+    LAUNCH_WITH_SQUEEZE_WITH_NO_DELAY,
+    LAUNCH_WITHOUT_SQUEEZE,
+    CUSTOM_SPEED_TURRET_LAUNCH,
+    UNJAM,
+    FORCE_HOME,
+    COAST,
+    BRAKE,
+    TEST_INFINITE_LAUNCH,
+    TEST_IDLE;
+}
+```
+
+Using an enum instead of raw strings or integers makes intent explicit and prevents typos:
+
+```java
+State current = State.IDLE;
+
+if (current == State.INTAKE_FUEL) {
+    intake.run();
+}
+```
+
+  </Accordion>
+
+  <Accordion title="Classes, objects, and methods">
+
+A **class** is a blueprint; an **object** is an instance of that blueprint. In FRC, every subsystem is a class, and the `Robot` class instantiates one object of each:
+
+```java
+// Intake.java — the blueprint
+public class Intake {
+    private int position;
+
+    // Constructor: runs when the object is created
+    public Intake(int startPos) {
+        position = startPos;
+    }
+
+    // Method: an action the object can perform
+    public void run() {
+        position = position + 2;
+    }
+
+    // Getter: returns private state
+    public int getPosition() {
+        return position;
+    }
+}
+```
+
+```java
+// Robot.java — creates the actual objects
+fuelIntake = new FuelIntake(config.fuelIntake);
+launcher   = new Launcher(config.launcher);
+hood       = new Hood(config.hood);
+```
+
+**Methods** define what a class can do. The general format is:
+
+```java
+scope returnType methodName(parameters) {
+    // body
+    return value; // omit if void
+}
+```
+
+Access modifiers control visibility:
+- `public` — accessible from anywhere
+- `private` — accessible only within the same class
+
+Spectrum keeps variables `private` and most methods `public`.
+
+**Lambda expressions** pass behavior as a value — used extensively when building Commands and supplying config values:
+
+```java
+// Full lambda syntax
+move(() -> config.getPercent());
+
+// Method reference shorthand (equivalent when the lambda just calls one method)
+move(config::getPercent);
+```
+
+**Static vs. non-static:**
+
+Static members belong to the class itself, not to any instance. Non-static members belong to a specific object:
+
+```java
+public class IntakeStates {
+    // Static: shared across all callers, no instance needed
+    private static Intake intake = Robot.getIntake();
+
+    public static void run() {
+        intake.run(); // calls non-static method on the static instance
+    }
+}
+```
+
+  </Accordion>
+
+</AccordionGroup>
+
+<CardGroup cols={2}>
+  <Card title="Command-based programming" icon="terminal" href="/frc-basics/command-based-programming">
+    See how these Java fundamentals power WPILib's command-based framework.
+  </Card>
+  <Card title="Applying Java to FRC" icon="robot" href="/frc-basics/applied-to-frc">
+    Learn which Java constructs are used most in FRC and how commands replace loops.
+  </Card>
+</CardGroup>

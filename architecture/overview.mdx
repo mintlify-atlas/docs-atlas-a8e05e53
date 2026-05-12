@@ -1,0 +1,122 @@
+---
+title: "How the 2026 Spectrum robot architecture works"
+description: "High-level overview of the three-layer architecture: SpectrumLib reusable base, robot subsystems and mechanisms, and the trigger-driven state coordinator."
+---
+
+The 2026 Spectrum robot codebase is organized into three distinct layers that work together to keep hardware concerns, robot-specific configuration, and high-level behavior cleanly separated. Understanding these layers makes it straightforward to add new mechanisms, tune existing behavior, or trace a control flow from a button press all the way to a motor command.
+
+## Three-layer architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Layer 3: Coordination                  │
+│   RobotStates.java  ·  Coordinator.java  ·  State.java      │
+│   Trigger bindings, high-level state machine, fan-out       │
+├─────────────────────────────────────────────────────────────┤
+│                  Layer 2: Robot Subsystems                   │
+│   FuelIntake  ·  Launcher  ·  IndexerBed  ·  IndexerTower   │
+│   IntakeExtension  ·  Hood  ·  Swerve  ·  Vision  ·  LEDs   │
+│   Each subsystem has a main class, config class, and states │
+├─────────────────────────────────────────────────────────────┤
+│                   Layer 1: SpectrumLib                       │
+│   SpectrumRobot  ·  SpectrumSubsystem  ·  Mechanism         │
+│   CachedDouble  ·  Rio  ·  TalonFXFactory  ·  Telemetry     │
+│   Reusable base classes shared across all Spectrum robots   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Each layer only depends on the layers below it. SpectrumLib has no knowledge of the specific game, the subsystem layer has no direct knowledge of high-level match strategy, and the coordination layer has no knowledge of motor CAN IDs or PID gains.
+
+## Layer 1: SpectrumLib
+
+SpectrumLib is a collection of reusable base classes that any Spectrum robot can use without modification. The most important pieces are:
+
+- **`SpectrumRobot`** — extends WPILib's `TimedRobot`. It maintains a list of all registered `SpectrumSubsystem` instances and calls `setupDefaultCommand()` and `setupStates()` on each one when the robot transitions between modes.
+- **`SpectrumSubsystem`** — a thin interface on top of WPILib's `Subsystem` that requires implementors to declare `setupStates()` and `setupDefaultCommand()`.
+- **`Mechanism`** — an abstract class that wraps a CTRE TalonFX leader motor plus optional permanent follower motors. It provides cached sensor reads, standard control mode helpers (Motion Magic, velocity, voltage, torque current), and trigger factories for position and velocity thresholds.
+- **`Rio`** — reads the RoboRIO serial number at startup and returns the matching `Rio` enum constant, which the robot uses to select the correct hardware configuration class.
+- **`CachedDouble`** — a `DoubleSupplier` wrapper that computes its value at most once per scheduler loop iteration, avoiding redundant CAN reads when the same sensor is consulted by multiple triggers.
+
+## Layer 2: Robot subsystems
+
+`Robot.java` is the single source of truth for every live subsystem instance. All subsystem fields are `public static` and are constructed in the `Robot` constructor in a deliberate order, with a short CAN initialization delay between each mechanism:
+
+```java
+// Robot.java – static subsystem fields
+@Getter private static Swerve swerve;
+@Getter private static FuelIntake fuelIntake;
+@Getter private static IntakeExtension intakeExtension;
+@Getter private static IndexerTower indexerTower;
+@Getter private static IndexerBed indexerBed;
+@Getter private static Operator operator;
+@Getter private static Pilot pilot;
+@Getter private static VisionSystem visionSystem;
+@Getter private static Launcher launcher;
+@Getter private static Hood hood;
+@Getter private static Vision vision;
+@Getter private static Auton auton;
+@Getter private static Coordinator coordinator;
+```
+
+The configuration for each subsystem is held in the nested `Robot.Config` class, whose fields are overridden by the appropriate robot-specific config class (`FM2026`, `PM2026`, etc.) before any subsystem is constructed:
+
+```java
+// Robot.java – Config class
+public static class Config {
+    public SwerveConfig swerve = new SwerveConfig();
+    public FuelIntakeConfig fuelIntake = new FuelIntakeConfig();
+    public IntakeExtensionConfig intakeExtension = new IntakeExtensionConfig();
+    public IndexerTowerConfig indexerTower = new IndexerTowerConfig();
+    public IndexerBedConfig indexerBed = new IndexerBedConfig();
+    public LauncherConfig launcher = new LauncherConfig();
+    public HoodConfig hood = new HoodConfig();
+    // ... and so on
+}
+```
+
+Each subsystem is organized into three files:
+
+| File | Role |
+|------|------|
+| `FuelIntake.java` | Hardware wiring, sensor reads, command factories |
+| `FuelIntake.Config` | Inner config class — CAN IDs, PID gains, limits |
+| `FuelIntakeStates.java` | Named commands and trigger bindings for this subsystem |
+
+## Layer 3: Coordination
+
+High-level robot behavior lives in three classes that communicate through the WPILib command scheduler:
+
+- **`State`** — a Java enum that names every possible robot-level mode (`IDLE`, `INTAKE_FUEL`, `TRACK_TARGET`, `LAUNCH_WITH_SQUEEZE`, `UNJAM`, etc.).
+- **`Coordinator`** — contains a single `applyRobotState(State state)` method. Each case in its `switch` statement sends exactly one command to each relevant subsystem simultaneously.
+- **`RobotStates`** — binds gamepad triggers, autonomous event markers, and zone triggers to `applyState()` / `clearState()` calls that drive the coordinator.
+
+When the pilot presses the right trigger (`pilot.RT`), the following chain executes:
+
+```
+pilot.RT.onTrue(...)
+  → RobotStates.applyState(State.INTAKE_FUEL)
+    → coordinator.applyRobotState(State.INTAKE_FUEL)
+      → FuelIntakeStates.intakeFuel()
+      → IndexerBedStates.slowIndex()
+      → IntakeExtensionStates.fullExtend()
+      → LauncherStates.idlePrep()
+      → HoodStates.home()
+```
+
+All six subsystems receive their commands in the same scheduler tick with no inter-subsystem coupling; the coordinator is the only class that knows about the cross-subsystem implications of each state.
+
+## How modes interact
+
+`Robot.java` calls `resetCommandsAndButtons()` at the start of disabled and teleop modes. This method cancels all running commands, clears all button bindings, then re-runs `setupStates()` on every registered `SpectrumSubsystem` and calls `RobotStates.setupStates()` to re-bind every trigger. This ensures clean state transitions between match phases without leftover commands or stale bindings.
+
+<CardGroup cols={3}>
+  <Card title="Robot states" icon="toggle-on" href="/architecture/robot-states">
+    How the State enum, RobotStates triggers, and Coordinator fan out commands to subsystems.
+  </Card>
+  <Card title="Subsystems and mechanisms" icon="cpu" href="/architecture/subsystems-and-mechanisms">
+    SpectrumSubsystem, the Mechanism base class, CachedDouble, and trigger factories.
+  </Card>
+  <Card title="Multi-robot configs" icon="sliders" href="/architecture/multi-robot-configs">
+    How Rio ID-based config selection loads different hardware parameters per robot.
+  </Card>
+</CardGroup>

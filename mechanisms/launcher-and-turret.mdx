@@ -1,0 +1,127 @@
+---
+title: "Launcher and Hood mechanism guide"
+description: "How the Launcher and Hood subsystems aim and fire fuel game pieces, including flywheel velocity control, hood angle adjustment, and TRACK_TARGET state flow."
+---
+
+The `Launcher` subsystem spins four Kraken X60 FOC motors to accelerate fuel game pieces to the correct exit velocity. The `Hood` subsystem adjusts the launch angle via a TalonFX-driven arm mechanism. Together with the swerve drive auto-rotating toward the goal (via `pilotAimAtTarget`), they implement a closed-loop shoot-on-the-move system driven by `ShotCalculator`.
+
+## Launcher hardware
+
+`Launcher` is configured in `LauncherConfig` with CAN IDs 46–49, all on the CANIVORE bus. Motor 46 is the leader; motors 47–49 are permanent followers.
+
+| Motor | CAN ID | Alignment |
+|---|---|---|
+| Launcher (leader) | 46 | — |
+| Launcher Top Right | 47 | Opposed |
+| Launcher Bottom Left | 48 | Aligned |
+| Launcher Bottom Right | 49 | Opposed |
+
+Key config values used at runtime:
+
+```java Launcher.java
+@Getter @Setter private double idlingRPM = 700;
+@Getter @Setter private double slowLaunchSpeed = 400;
+@Getter @Setter private double autoTrenchLaunch = 1800;
+@Getter @Setter private double LauncherVoltage = 9.0;
+@Getter @Setter private double LauncherTorqueCurrent = 85.0;
+@Getter private double onTargetToleranceRPM = 100;
+```
+
+The velocity loop uses Torque-FOC with gains `Kp = 10`, `Ks = 20`, and `Kv = 0`. Current limits are tiered: 80 A supply current dropping to 60 A after 1 s, with a 100 A stator limit.
+
+## LauncherStates command reference
+
+`LauncherStates` schedules commands onto the `Launcher` subsystem using the same `scheduleIfNotRunning` guard used throughout the codebase.
+
+| State method | Behavior |
+|---|---|
+| `idlePrep()` | Spin at `idlingRPM` (700 RPM) — keeps flywheel warm |
+| `aimAtTarget()` | Track shot speed via `ShotCalculator` (`trackTargetCommand`) |
+| `autonAimAtTarget()` | Fixed velocity at `autoTrenchLaunch` (1800 RPM) for autonomous |
+| `slowLaunch()` | Fixed velocity at `slowLaunchSpeed` (400 RPM) |
+| `customLaunchSpeed()` | Live-tunable speed from NetworkTables (`OnTheFlySpeed`) |
+| `neutral()` | Zero voltage |
+| `coastMode()` / `ensureBrakeMode()` | Motor neutral mode changes |
+
+`launchFuel()` is a `Command` (not a void state setter) returned for composition:
+
+```java LauncherStates.java
+public static Command launchFuel() {
+    return launcher.runTorqueFOC(config::getLauncherTorqueCurrent)
+            .withName("Launcher.launchFuelCommand");
+}
+```
+
+## aimingAtTarget() trigger
+
+`LauncherStates.aimingAtTarget()` wraps `launcher.aimingAtTarget()`, which compares the current flywheel RPM against the `ShotCalculator` setpoint within the `onTargetToleranceRPM` window (100 RPM). Robot states use this trigger to gate the actual fuel release — the indexer tower does not advance until the launcher is on target.
+
+```java LauncherStates.java
+public static Trigger aimingAtTarget() {
+    return launcher.aimingAtTarget();
+}
+```
+
+```java LauncherStates.java
+public static void aimAtTarget() {
+    scheduleIfNotRunning(launcher.trackTargetCommand().withName("Launcher.aimAtHub"));
+}
+
+public static Command aimAtTargetCommand() {
+    return log(launcher.trackTargetCommand().withName("Launcher.aimAtHubCommand"));
+}
+```
+
+## TRACK_TARGET and LAUNCH_WITH_SQUEEZE states
+
+`RobotStates` defines the targeting and launch states that coordinate the launcher and swerve drive:
+
+<Steps>
+  <Step title="TRACK_TARGET (pilot X button, whileTrue)">
+    The robot enters `TRACK_TARGET` when the pilot holds the X button. The swerve drive calls `pilotAimAtTarget` to rotate the chassis toward the goal angle computed by `ShotCalculator`. `LauncherStates.aimAtTarget()` spins the flywheel to the calculated speed. The indexer remains neutral — no fuel is advanced yet.
+  </Step>
+  <Step title="LAUNCH_WITH_SQUEEZE (pilot LT, when RT not held)">
+    When the pilot presses LT the robot transitions to `LAUNCH_WITH_SQUEEZE`. The launcher continues tracking. Once `aimingAtTarget()` is true the `IndexerTower` advances fuel into the spinning flywheel via `launchFuel()`.
+  </Step>
+</Steps>
+
+The swerve bindings for these states are declared in `SwerveStates`:
+
+```java SwerveStates.java
+private static final Trigger launching =
+        new Trigger(
+                () ->
+                        RobotStates.getAppliedState() == State.LAUNCH_WITH_SQUEEZE
+                                || RobotStates.getAppliedState() == State.LAUNCH_WITHOUT_SQUEEZE);
+
+private static final Trigger launchPreping =
+        new Trigger(() -> RobotStates.getAppliedState() == State.TRACK_TARGET);
+
+(launching.or(launchPreping))
+        .and(isRed, Util.autoMode.not())
+        .whileTrue(log(pilotAimAtTargetRed()));
+```
+
+## Shot sequence flow
+
+The full shot sequence from aiming to fuel exit:
+
+```
+Pilot holds X button
+  └─ TRACK_TARGET: swerve rotates to goal, flywheel spins up
+
+Pilot presses LT
+  └─ LAUNCH_WITH_SQUEEZE
+       └─ aimingAtTarget() true?
+            ├─ Yes → IndexerTower.launchFuel() → fuel exits
+            └─ No  → wait for flywheel to reach target RPM
+```
+
+<CardGroup cols={2}>
+  <Card title="Launcher source" icon="bolt" href="https://github.com/spectrum3847/2026-Spectrum/blob/main/src/main/java/frc/robot/launcher/Launcher.java">
+    Four-motor flywheel config, current limits, and simulation setup.
+  </Card>
+  <Card title="LauncherStates source" icon="code" href="https://github.com/spectrum3847/2026-Spectrum/blob/main/src/main/java/frc/robot/launcher/LauncherStates.java">
+    All state command factories and the aimingAtTarget trigger.
+  </Card>
+</CardGroup>

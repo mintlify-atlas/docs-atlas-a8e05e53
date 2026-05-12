@@ -1,0 +1,135 @@
+---
+title: "Robot simulation with WPILib and IronMaple"
+description: "How RobotSim.java wires IronMaple season physics, mechanism visualization classes, and PhotonVision camera simulation for testing code without hardware."
+---
+
+Simulation lets you run the full robot program on a laptop without any physical hardware. Spectrum's simulation setup combines WPILib's `Mechanism2d` visualization, IronMaple's REBUILT 2026 game physics, and PhotonVision's camera simulation so that most robot behaviors — intake, launching, autonomous paths, and pose estimation — can be tested and debugged before touching the real robot.
+
+## Benefits of simulation-first development
+
+- **Start early.** Programmers can write and test subsystem logic before the robot is assembled.
+- **Parallel workflows.** Multiple team members can work on different subsystems simultaneously without competing for robot time.
+- **Catch logic errors early.** A misrouted command or bad state transition is much cheaper to find in simulation than on the field.
+- **Safer iteration.** Tuning trajectory or state machine logic in sim avoids damaging hardware.
+
+<Warning>
+Simulation does not replace hardware testing. Motor response, sensor noise, and mechanical interactions differ between sim and the real robot. Always validate on hardware before competition.
+</Warning>
+
+## IronMaple season physics
+
+`RobotSim.java` uses two IronMaple classes specific to the REBUILT 2026 game:
+
+| Class | Package | Purpose |
+|-------|---------|---------|
+| `RebuiltFuelOnFly` | `org.ironmaple.simulation.seasonspecific.rebuilt2026` | Simulates fuel game pieces as projectiles with trajectory physics |
+| `Arena2026Rebuilt` (via `SimulatedArena`) | `org.ironmaple.simulation.seasonspecific.rebuilt2026` | Provides the simulated field environment and game piece positions |
+
+Game pieces enter the simulation through an `IntakeSimulation` configured for the robot's bumper geometry:
+
+```java
+private static final IntakeSimulation intakeSimulation =
+        RobotBase.isSimulation()
+                ? IntakeSimulation.OverTheBumperIntake(
+                        "Fuel",
+                        Robot.getSwerve().getMapleSimSwerveDrivetrain().mapleSimDrive,
+                        Inches.of(29),   // bumper width
+                        Inches.of(12),   // intake depth
+                        IntakeSimulation.IntakeSide.FRONT,
+                        80)              // intake force (N)
+                : null;
+```
+
+## Launching fuel projectiles in simulation
+
+When the robot fires in simulation, `mapleSimCreateFuelProjectile()` constructs a `RebuiltFuelOnFly` projectile using real shot parameters from `ShotCalculator`:
+
+```java
+GamePieceProjectile fuelProjectile =
+        new RebuiltFuelOnFly(
+                Robot.getSwerve().getRobotPose().getTranslation(),
+                new Translation2d(),
+                Robot.getSwerve().getCurrentRobotChassisSpeeds(),
+                Rotation2d.kZero,
+                Inches.of(29),
+                MetersPerSecond.of(parameters.flywheelSpeed() * 0.0025),
+                Degrees.of(65))
+        .withProjectileTrajectoryDisplayCallBack(
+                (pose3ds) -> Telemetry.log(
+                        "SimShot/FuelProjectileSuccessfulShot",
+                        pose3ds.toArray(Pose3d[]::new)),
+                (pose3ds) -> Telemetry.log(
+                        "SimShot/FuelProjectileUnsuccessfulShot",
+                        pose3ds.toArray(Pose3d[]::new)));
+SimulatedArena.getInstance().addGamePieceProjectile(fuelProjectile);
+```
+
+Successful and unsuccessful shot trajectories are both logged to AdvantageScope via `Telemetry.log`.
+
+## Mechanism2d visualization
+
+`RobotSim` builds a side-view (`leftView`) `Mechanism2d` canvas published to SmartDashboard under `"Sim/LeftView"`. The robot chassis is drawn as a purple rectangle using chained `MechanismLigament2d` segments:
+
+```java
+public static final Mechanism2d leftView =
+        new Mechanism2d(
+                Units.inchesToMeters(leftViewWidth),   // 75 in
+                Units.inchesToMeters(leftViewHeight)); // 75 in
+
+// In the constructor:
+SmartDashboard.putData("Sim/LeftView", RobotSim.leftView);
+```
+
+Subsystem simulations attach their own `LinearSim`, `ArmSim`, or `RollerSim` roots to `leftView`, so the complete mechanism assembly moves together in AdvantageScope or Elastic Dashboard.
+
+## SpectrumLib simulation classes
+
+SpectrumLib provides three mechanism simulation classes used across subsystems:
+
+| Class | Simulates | Notes |
+|-------|-----------|-------|
+| `LinearSim` | Elevator or linear extension | Tracks position against motor state |
+| `ArmSim` | Rotating arm | Uses angle and gravity compensation |
+| `RollerSim` | Spinning roller or wheel | Displays direction and relative velocity |
+
+These classes can be attached to each other to compose multi-stage mechanisms (e.g., a roller mounted to an elevator that is itself mounted to an arm).
+
+## PhotonVision camera simulation
+
+`VisionSystem.java` registers `PhotonCameraSim` instances with a `VisionSystemSim` and calls `visionSim.update(pose)` every simulation cycle. This lets the vision pipeline produce realistic AprilTag detections based on the simulated robot pose. See the [vision systems page](/systems/vision) for full details.
+
+## Running simulation
+
+<Steps>
+  <Step title="Open the project in VS Code">
+    Ensure the WPILib extension is installed and the project builds without errors.
+  </Step>
+  <Step title="Launch simulation">
+    Press **Ctrl+Shift+P** and run **WPILib: Simulate Robot Code**, or click the WPILib icon and select **Simulate Robot Code**.
+  </Step>
+  <Step title="Connect a driver station">
+    Open the FRC Driver Station (or use the simulated DS). Enable the robot in autonomous or teleop to trigger the relevant init methods.
+  </Step>
+  <Step title="View mechanisms">
+    Open AdvantageScope or Elastic Dashboard and connect to the simulated NetworkTables server at `localhost`. Navigate to `SmartDashboard/Sim/LeftView` to see the mechanism canvas.
+  </Step>
+</Steps>
+
+## What simulation covers and does not cover
+
+| Covered | Not covered |
+|---------|-------------|
+| Command scheduling and state machine logic | Real motor torque and electrical behavior |
+| PathPlanner path following | Sensor drift and encoder noise |
+| IronMaple fuel projectile physics | Vision accuracy on real field lighting |
+| PhotonVision AprilTag detections | Mechanical compliance and friction |
+| Telemetry and log output | CAN bus latency and brownouts |
+
+<CardGroup cols={2}>
+  <Card title="Vision systems" icon="camera" href="/systems/vision">
+    PhotonVision camera simulation and AprilTag field layout configuration.
+  </Card>
+  <Card title="Logging and telemetry" icon="chart-line" href="/systems/logging-and-telemetry">
+    How simulation shot trajectories and mechanism states are captured in logs.
+  </Card>
+</CardGroup>

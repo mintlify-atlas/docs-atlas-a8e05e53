@@ -1,0 +1,255 @@
+---
+title: "Robot states and trigger-driven coordination"
+description: "Explains how high-level robot states (IDLE, INTAKE_FUEL, etc.) are defined, triggered, and fanned out to individual subsystem commands via Coordinator.java."
+---
+
+Rather than wiring pilot buttons directly to individual mechanism commands, the 2026 robot uses a level of indirection: every significant robot action is represented as a named `State`, a trigger in `RobotStates` transitions the robot into that state, and `Coordinator` fans the state out to simultaneous commands on every affected subsystem. This keeps pilot bindings, robot strategy, and hardware commands in three separate, independently editable places.
+
+## The State enum
+
+`State.java` defines every high-level mode the robot can be in as a plain Java enum. These values are passed to `Coordinator.applyRobotState()` and stored in `RobotStates.appliedState` for telemetry:
+
+```java
+// frc/robot/State.java
+public enum State {
+    IDLE,
+
+    INTAKE_FUEL,
+    SNAKE_INTAKE,
+
+    TRACK_TARGET,
+    TRACK_TARGET_WITH_NO_SWERVE,
+    LAUNCH_WITH_SQUEEZE,
+    LAUNCH_WITH_SQUEEZE_WITH_NO_DELAY,
+    LAUNCH_WITHOUT_SQUEEZE,
+
+    AUTON_TRACK_TARGET,
+    AUTON_LAUNCH_WITH_SQUEEZE,
+
+    CUSTOM_SPEED_TURRET_LAUNCH,
+    UNJAM,
+    FORCE_HOME,
+
+    COAST,
+    BRAKE,
+    TEST_INFINITE_LAUNCH,
+    TEST_IDLE;
+}
+```
+
+The enum also encodes a scoring sequence — `TRACK_TARGET` knows its natural next state is `LAUNCH_WITH_SQUEEZE` — and exposes an `isReady()` predicate that other systems can poll:
+
+```java
+// State.java – scoring sequence helpers
+private static final ImmutableMap<State, State> scoreSequence =
+    ImmutableMap.ofEntries(Map.entry(TRACK_TARGET, LAUNCH_WITH_SQUEEZE));
+
+public State getNext() {
+    return getNextState(this);  // returns LAUNCH_WITH_SQUEEZE when called on TRACK_TARGET
+}
+
+public BooleanSupplier isReady() {
+    return isReadyState(this);  // true for TRACK_TARGET
+}
+```
+
+## Coordinator: simultaneous cross-subsystem commands
+
+`Coordinator.applyRobotState()` is the single method that translates a `State` into commands for every involved subsystem. Each `case` block calls static command schedulers on the relevant `*States` classes:
+
+```java
+// frc/robot/Coordinator.java
+public void applyRobotState(State state) {
+    switch (state) {
+        case IDLE -> {
+            FuelIntakeStates.stop();
+            IndexerTowerStates.neutral();
+            IndexerBedStates.neutral();
+            IntakeExtensionStates.neutral();
+            LauncherStates.idlePrep();
+            HoodStates.home();
+        }
+        case INTAKE_FUEL -> {
+            FuelIntakeStates.intakeFuel();
+            IndexerTowerStates.neutral();
+            IndexerBedStates.slowIndex();
+            IntakeExtensionStates.fullExtend();
+            LauncherStates.idlePrep();
+            HoodStates.home();
+        }
+        case TRACK_TARGET -> {
+            FuelIntakeStates.stop();
+            IndexerTowerStates.neutral();
+            IndexerBedStates.neutral();
+            IntakeExtensionStates.fullExtendConditional();
+            LauncherStates.aimAtTarget();
+            HoodStates.aimAtTarget();
+        }
+        case LAUNCH_WITH_SQUEEZE -> {
+            FuelIntakeStates.intakeFuel();
+            IndexerTowerStates.indexMax();
+            IndexerBedStates.indexMax();
+            IntakeExtensionStates.slowIntakeCloseWithDelay();
+            LauncherStates.aimAtTarget();
+            HoodStates.aimAtTarget();
+        }
+        case UNJAM -> {
+            FuelIntakeStates.stop();
+            IndexerTowerStates.unjam();
+            IndexerBedStates.unjam();
+            IntakeExtensionStates.fullExtendConditional();
+            LauncherStates.neutral();
+            HoodStates.home();
+        }
+        // ... additional cases for COAST, BRAKE, TEST_*, etc.
+    }
+}
+```
+
+No subsystem class imports any other subsystem class directly. All cross-subsystem coordination goes through this one switch statement.
+
+## RobotStates: binding triggers to states
+
+`RobotStates.setupStates()` is called every time the robot enters a new match phase. It wires WPILib `Trigger` objects — gamepad buttons, zone predicates, autonomous event flags — to `applyState()` commands:
+
+```java
+// frc/robot/RobotStates.java
+public static void setupStates() {
+
+    // Right trigger alone → intake fuel
+    pilot.RT.onTrue(
+        Commands.either(applyState(State.INTAKE_FUEL), Commands.none(), pilot.LT.negate()));
+
+    // Left trigger alone → launch with squeeze
+    pilot.LT.onTrue(
+        Commands.either(
+            applyState(State.LAUNCH_WITH_SQUEEZE), Commands.none(), pilot.RT.negate()));
+
+    // Both triggers together → launch without squeeze
+    pilot.LT.and(pilot.RT).onTrue(applyState(State.LAUNCH_WITHOUT_SQUEEZE));
+
+    // X button → track target while held
+    pilot.XButton.whileTrue(applyState(State.TRACK_TARGET));
+    pilot.XButton.onFalse(applyState(State.IDLE));
+
+    // A button → unjam while held
+    pilot.AButton.whileTrue(applyState(State.UNJAM));
+    pilot.AButton.onFalse(applyState(State.IDLE));
+
+    // Operator test button → infinite launch for tuning
+    operator.testX.onTrue(applyState(State.TEST_INFINITE_LAUNCH));
+    operator.testX.onFalse(applyState(State.TEST_IDLE));
+
+    // Autonomous event triggers
+    Auton.autonIntake.onTrue(applyState(State.INTAKE_FUEL));
+    Auton.autonShotPrep.onTrue(applyState(State.TRACK_TARGET_WITH_NO_SWERVE));
+    Auton.autonShoot.onTrue(applyState(State.LAUNCH_WITH_SQUEEZE));
+}
+```
+
+`applyState()` is a `Commands.runOnce` wrapper that updates `appliedState` and calls the coordinator atomically:
+
+```java
+// RobotStates.java
+public static Command applyState(State state) {
+    return Commands.runOnce(
+        () -> {
+            appliedState = state;
+            coordinator.applyRobotState(state);
+        })
+        .withName("APPLYING STATE: " + state);
+}
+```
+
+The current `appliedState` is logged every robot period and is visible in AdvantageScope under the `Applied State` key.
+
+## The INTAKE_FUEL state chain: end-to-end example
+
+<Steps>
+  <Step title="Pilot presses right trigger">
+    `pilot.RT` becomes true. The binding checks that `pilot.LT` is not also pressed, then schedules `applyState(State.INTAKE_FUEL)`.
+  </Step>
+  <Step title="RobotStates.applyState runs">
+    `appliedState` is set to `INTAKE_FUEL` and `coordinator.applyRobotState(State.INTAKE_FUEL)` is called in the same `runOnce` lambda.
+  </Step>
+  <Step title="Coordinator fans out commands">
+    In the same scheduler tick, the coordinator schedules:
+    - `FuelIntakeStates.intakeFuel()` — runs the intake rollers
+    - `IndexerBedStates.slowIndex()` — slowly pulls fuel toward the tower
+    - `IntakeExtensionStates.fullExtend()` — deploys the intake arm
+    - `LauncherStates.idlePrep()` — spins the launcher to a low ready RPM
+    - `HoodStates.home()` — keeps the hood retracted
+    - `IndexerTowerStates.neutral()` — tower stays idle
+  </Step>
+  <Step title="Pilot releases right trigger">
+    `pilot.RT` goes false. The binding fires `applyState(State.IDLE)` (or `LAUNCH_WITH_SQUEEZE` if `pilot.LT` is held), returning all six subsystems to their idle or next-state commands.
+  </Step>
+</Steps>
+
+## Zone-based triggers
+
+`RobotStates` also declares field-position triggers derived from swerve odometry. These can gate behavior without any explicit pilot input:
+
+```java
+// RobotStates.java – zone triggers
+public static final Trigger robotInNeutralZone = swerve.inNeutralZone();
+public static final Trigger robotInEnemyZone   = swerve.inEnemyAllianceZone();
+public static final Trigger robotInFeedZone    = robotInEnemyZone.or(robotInNeutralZone);
+public static final Trigger robotInScoreZone   = robotInFeedZone.not();
+public static final Trigger launcherOnTarget   = LauncherStates.aimingAtTarget();
+```
+
+These triggers compose with gamepad triggers using WPILib's `.and()`, `.or()`, and `.negate()` chaining to express complex multi-condition behaviors without imperative if-statements.
+
+## State telemetry
+
+Every trigger binding that logs a meaningful signal uses a helper to keep DogLog entries in sync:
+
+```java
+// RobotStates.java
+private static void bindTriggerTelemetry(String name, Trigger trigger) {
+    trigger.onTrue(Commands.runOnce(() -> Telemetry.log(name, true)));
+    trigger.onFalse(Commands.runOnce(() -> Telemetry.log(name, false)));
+}
+
+// Usage:
+bindTriggerTelemetry("LauncherPrep/LauncherOnTarget", launcherOnTarget);
+```
+
+<Note>
+`setupStates()` is called once per mode transition, not every loop. If you add a new trigger binding you must call it inside `setupStates()` or `RobotStates.setupStates()` — bindings added outside these methods will not survive a mode reset.
+</Note>
+
+## State reference
+
+<AccordionGroup>
+  <Accordion title="Teleop states">
+    | State | Description |
+    |-------|-------------|
+    | `IDLE` | All mechanisms neutral or at home. Default between actions. |
+    | `INTAKE_FUEL` | Deploys intake arm, runs intake and slow indexer bed. |
+    | `SNAKE_INTAKE` | Alternate intake path. |
+    | `TRACK_TARGET` | Launcher and hood aim at target; swerve may rotate to assist. |
+    | `TRACK_TARGET_WITH_NO_SWERVE` | Same as `TRACK_TARGET` but swerve is not commanded to rotate. |
+    | `LAUNCH_WITH_SQUEEZE` | Full launch sequence — intake runs, indexer at max, launcher aimed, intake retracts with delay. |
+    | `LAUNCH_WITH_SQUEEZE_WITH_NO_DELAY` | Same as above but intake retracts immediately. |
+    | `LAUNCH_WITHOUT_SQUEEZE` | Full launch without retracting the intake extension. |
+    | `UNJAM` | Reverses indexer and bed to clear jammed fuel. |
+    | `FORCE_HOME` | Fully retracts intake extension; all other mechanisms neutral. |
+    | `CUSTOM_SPEED_TURRET_LAUNCH` | Launches at a tunable custom speed, hood aimed. |
+  </Accordion>
+  <Accordion title="Autonomous states">
+    | State | Description |
+    |-------|-------------|
+    | `AUTON_TRACK_TARGET` | Aim at target using autonomous-specific PID tuning. |
+    | `AUTON_LAUNCH_WITH_SQUEEZE` | Launch sequence using autonomous-specific PID tuning. |
+  </Accordion>
+  <Accordion title="Utility and test states">
+    | State | Description |
+    |-------|-------------|
+    | `COAST` | Sets intake extension and hood to coast neutral mode. |
+    | `BRAKE` | Sets intake extension and hood to brake neutral mode. |
+    | `TEST_INFINITE_LAUNCH` | Continuously cycles fuel through all stages at slow speed for tuning. |
+    | `TEST_IDLE` | Stops everything; used to exit `TEST_INFINITE_LAUNCH`. |
+  </Accordion>
+</AccordionGroup>

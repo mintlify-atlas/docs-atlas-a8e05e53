@@ -1,0 +1,74 @@
+---
+title: "Elastic Dashboard for real-time robot telemetry"
+description: "Set up Elastic Dashboard with NetworkTables to monitor robot sensors, select autonomous routines, and tune parameters live during development and competition."
+---
+
+Elastic Dashboard is an FRC dashboard application bundled with WPILib that connects to the robot over NetworkTables and provides customizable real-time visualization. Spectrum uses it alongside AdvantageScope for monitoring robot state, selecting autonomous routines from SmartDashboard, and surfacing key telemetry during matches.
+
+## Connecting to the robot
+
+<Steps>
+  <Step title="Launch Elastic Dashboard">
+    Elastic is included in the WPILib installation. Open it from the WPILib VS Code tools menu or run it directly.
+  </Step>
+  <Step title="Configure the team number">
+    Set your team number (3847) in Elastic's settings. It will automatically connect to `roborio-3847-frc.local` or the robot's direct IP address when on the same network.
+  </Step>
+  <Step title="Load or create a layout">
+    Open an existing `elastic-layout.json` from the repository or create a new layout by dragging widgets onto the canvas. Layouts are saved as JSON and can be committed to the repo for the whole team to use.
+  </Step>
+</Steps>
+
+## Key widgets for competition use
+
+<AccordionGroup>
+  <Accordion title="Autonomous selector">
+    The `SendableChooser` published by `Auton.java` appears automatically in Elastic as a dropdown widget. Add it to your layout to select the autonomous routine before each match.
+
+    ```java java
+    // From Auton.java — publishes chooser to SmartDashboard/NetworkTables
+    SmartDashboard.putData("Auto Chooser", autoChooser);
+    ```
+
+    Add a **ComboBox Chooser** widget in Elastic and point it at `SmartDashboard/Auto Chooser`.
+  </Accordion>
+  <Accordion title="Robot state indicators">
+    Use **Boolean Box** or **Text Display** widgets to surface key `Telemetry` values published from `RobotStates.java`:
+    - Current applied `State` (IDLE, INTAKE_FUEL, TURRET_TRACK, etc.)
+    - `launcherOnTarget` trigger status
+    - Vision pose confidence
+  </Accordion>
+  <Accordion title="Mechanism positions">
+    Add **Number Sliders** or **Gauge** widgets for live mechanism positions (turret angle, launcher velocity, indexer position) published via `CachedDouble` sensors in each subsystem's `periodic()` method.
+  </Accordion>
+  <Accordion title="Match timer and alliance">
+    Elastic has a built-in **Match Time** widget and **FMS Info** display. Add these to monitor match phase and alliance color.
+  </Accordion>
+</AccordionGroup>
+
+## NetworkTables and SmartDashboard
+
+All data displayed in Elastic flows through NetworkTables — the synchronized key-value store that WPILib uses to communicate between robot code and driver station applications.
+
+```java java
+// Publishing a value from robot code (any subsystem)
+SmartDashboard.putNumber("Launcher/VelocityRPM", launcher.getVelocityRPM());
+SmartDashboard.putBoolean("Vision/HasTarget", vision.hasTarget());
+
+// The Telemetry utility (SpectrumLib) wraps this for structured logging
+Telemetry.log("LauncherState", currentState.name());
+```
+
+Values published via `SmartDashboard.put*()` or `Telemetry.log()` are immediately available in Elastic under the `SmartDashboard/` NetworkTables subtable.
+
+## Tuning PID gains live
+
+Elastic can write values back to the robot, enabling live PID gain tuning without redeployment:
+
+1. Publish a `TuneValue` entry from robot code (see [PID Tuning](/tools/pid-tuning))
+2. Add a **Number Slider** widget in Elastic pointing to the same NetworkTables key
+3. Adjust the slider during a test run — the robot reads the updated value on the next periodic loop
+
+<Tip>
+  During competition, lock your Elastic layout to prevent accidental widget moves. Use the lock icon in the Elastic toolbar.
+</Tip>

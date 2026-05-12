@@ -1,27 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
-  "name": "Spectrum 3847 — 2026 Robot Code",
+  "projectType": "general",
+  "projectName": "Spectrum 3847 — 2026 Robot Code",
+  "projectDescription": "FRC Team Spectrum 3847's robot code for the 2026 REBUILT season, featuring a command-based Java architecture with swerve drive, vision-assisted targeting, multi-mechanism game piece handling, and a reusable SpectrumLib utility library.",
   "theme": "aspen",
-  "colors": {
-    "primary": "#e4a506",
-    "light": "#090704",
-    "dark": "#548aa0"
-  },
-  "logo": {
-    "light": "https://media.brand.dev/4efbb76e-d966-477a-8ae5-2d5c9bb5b9d5.png",
-    "dark": "https://media.brand.dev/4efbb76e-d966-477a-8ae5-2d5c9bb5b9d5.png"
-  },
-  "navbar": {
-    "primary": {
-      "type": "github",
-      "href": "https://github.com/spectrum3847/2026-Spectrum"
-    }
-  },
-  "footer": {
-    "socials": {
-      "github": "https://github.com/spectrum3847/2026-Spectrum"
-    }
-  },
+  "primaryColor": "#e4a506",
+  "lightColor": "#090704",
+  "darkColor": "#548aa0",
   "navigation": {
     "tabs": [
       {
@@ -109,5 +93,28 @@
         ]
       }
     ]
-  }
+  },
+  "keyFeatures": [
+    "Mechanism base class wrapping CTRE TalonFX/Kraken motor controllers for simplified configuration and control",
+    "Trigger-based state machine eliminating complex command group nesting",
+    "Full robot simulation with IronMaple season-specific physics (Roller, Linear, Arm mechanisms)",
+    "SpectrumLib reusable utility library (CachedDouble, LED management, gamepad abstraction)",
+    "Multi-robot configuration support (FM2026, XM2026, PM2026, AM2026) via Rio ID",
+    "Vision-assisted pose estimation with Limelight MegaTag and PhotonVision AprilTag fusion",
+    "PathPlanner-based autonomous routines with event markers",
+    "CANdle LED subsystem with animation priorities and multi-strip support"
+  ],
+  "publicApiSurface": [
+    "Mechanism (abstract base class for TalonFX-driven subsystems)",
+    "SpectrumSubsystem (base WPILib subsystem wrapper)",
+    "SpectrumRobot (base robot class)",
+    "CachedDouble (CANbus-efficient cached sensor value)",
+    "TalonFXFactory (motor configuration factory)",
+    "SpectrumCANcoder / SpectrumCANcoderConfig",
+    "SpectrumServo",
+    "SpectrumState (holdable boolean trigger)",
+    "RobotStates.setupStates() (trigger-to-command binding entry point)",
+    "Coordinator (multi-subsystem state coordinator)",
+    "Robot.Config / XM2026 / PM2026 / FM2026 / AM2026 (hardware configuration classes)"
+  ]
 }

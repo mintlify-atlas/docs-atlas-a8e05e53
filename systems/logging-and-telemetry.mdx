@@ -1,0 +1,145 @@
+---
+title: "Logging, telemetry, and data analysis tools"
+description: "How Spectrum uses DogLog, AdvantageScope, Elastic Dashboard, and Telemetry.java to capture, replay, and analyze robot data during development and competition."
+---
+
+Good logging is the foundation of fast debugging. Spectrum's `Telemetry` class extends DogLog to give every part of the codebase a consistent, structured way to record sensor values, command lifecycle events, and fault conditions. That data flows into AdvantageScope for post-match replay and Elastic Dashboard for real-time monitoring during practice and competition.
+
+## Telemetry.java
+
+`Telemetry` extends `DogLog` and registers itself as a WPILib subsystem so it runs a `periodic()` loop that polls NetworkTables alerts each cycle. It provides three main logging primitives:
+
+### `Telemetry.log(key, value)`
+
+Inherited from DogLog, `log` writes a key-value pair to the structured log file. Use hierarchical slash-separated keys to organize data in AdvantageScope:
+
+```java
+// In a subsystem's periodic() method
+@Override
+public void periodic() {
+    Telemetry.log("Swerve/RobotPoseX", getRobotPose().getX());
+    Telemetry.log("Swerve/RobotPoseY", getRobotPose().getY());
+}
+```
+
+### `Telemetry.log(Command)`
+
+Wraps a command with start and end log entries so every command execution is captured in the log automatically:
+
+```java
+public static Command log(Command cmd) {
+    return cmd.deadlineFor(
+                    Commands.startEnd(
+                            () -> log("Commands", "Init: " + cmd.getName()),
+                            () -> log("Commands", "End: " + cmd.getName())))
+            .ignoringDisable(cmd.runsWhenDisabled())
+            .withName(cmd.getName());
+}
+```
+
+In auton and coordinator code, wrap commands with `log(...)` when you want to trace which commands ran and when they ended.
+
+### `Telemetry.print(message, priority)`
+
+Writes to the DriverStation console and to the structured log under `"Prints"`. The timestamp is prepended automatically:
+
+```java
+public static void print(String output, PrintPriority priority) {
+    String out = "TIME: " + String.format("%.3f", Timer.getFPGATimestamp()) + " || " + output;
+    if (priority == PrintPriority.HIGH || Telemetry.priority == PrintPriority.NORMAL) {
+        System.out.println(out);
+    }
+    log("Prints", out);
+}
+```
+
+Use `PrintPriority.HIGH` for messages that must always appear (mode transitions, critical faults). Use `PrintPriority.NORMAL` for verbose debug output that you may want to suppress during competition.
+
+## Starting Telemetry
+
+Call `Telemetry.start(...)` once during robot initialization to configure DogLog options:
+
+```java
+Telemetry.start(
+    /* ntPublish      */ true,   // publish log entries to NetworkTables
+    /* captureDs      */ true,   // capture DriverStation messages
+    /* captureNt      */ false,  // capture all NT entries (expensive)
+    /* captureConsole */ true,   // capture System.out to log
+    /* logExtras      */ true,   // log PDH currents, CAN usage, radio
+    /* tunableOnFMS   */ false,  // disable NT tunables on FMS
+    PrintPriority.HIGH           // minimum console priority
+);
+```
+
+## Fault tracking
+
+`Telemetry` defines a `Fault` enum for named fault conditions that appear as alerts in the DriverStation and log:
+
+```java
+public enum Fault {
+    CAMERA_OFFLINE,
+    AUTO_SHOT_TIMEOUT_TRIGGERED,
+    BROWNOUT,
+}
+```
+
+Alerts from `SmartDashboard/Alerts` are polled every cycle in `logAlerts()` and written to the log under the `"Alerts"` key so fault timing is always captured even if a human misses the DriverStation message.
+
+## Log key conventions
+
+Organize log entries with hierarchical keys so AdvantageScope can display them as a tree:
+
+| Pattern | Example | Use |
+|---------|---------|-----|
+| `Subsystem/ValueName` | `Swerve/RobotPoseX` | Sensor readings and outputs |
+| `Commands` | `Commands` | Command init and end events (via `Telemetry.log(cmd)`) |
+| `Alerts` | `Alerts` | Error/warning/info alerts from NetworkTables |
+| `Prints` | `Prints` | Console messages with timestamps |
+| `SimShot/...` | `SimShot/FuelProjectileSuccessfulShot` | Simulation-specific data |
+
+## DogLog
+
+DogLog is the underlying structured logging library. It writes a `.wpilog` file to the RoboRIO's filesystem during each robot session. Spectrum extends it rather than using it directly so that all code goes through `Telemetry` and picks up the console-routing and alert-polling behavior automatically.
+
+## AdvantageScope
+
+AdvantageScope opens `.wpilog` files for post-match analysis. Key use cases:
+
+- **Replay pose data** — plot `Swerve/RobotPoseX` and `RobotPoseY` on a field map to visualize actual vs. expected paths.
+- **Correlate commands with sensor state** — the `Commands` log key shows exactly when each command started and ended, making it easy to trace why a mechanism behaved unexpectedly.
+- **Visualize mechanisms** — `Mechanism2d` data published to SmartDashboard during simulation renders in AdvantageScope's mechanism view.
+- **Inspect simulation trajectories** — `SimShot/FuelProjectileSuccessfulShot` and `SimShot/FuelProjectileUnsuccessfulShot` log 3D pose arrays that AdvantageScope can render on the field.
+
+## Elastic Dashboard
+
+Elastic Dashboard connects to the robot's NetworkTables during practice and competition for real-time monitoring. Because `Telemetry.start()` sets `ntPublish: true`, all log entries are also available as NetworkTables topics. Common panels to configure:
+
+- **CommandScheduler** — `SmartDashboard/Scheduler` shows running commands (auto-populated by `Telemetry.start()`).
+- **Auto Chooser** — `SmartDashboard/Auto Chooser` exposes the `SendableChooser` for routine selection.
+- **Mechanism2d** — `SmartDashboard/Sim/LeftView` shows the side-view mechanism canvas during simulation.
+
+## What to log
+
+<AccordionGroup>
+  <Accordion title="Commands">
+    Wrap significant commands with `Telemetry.log(cmd)` in `Auton.java` and `Coordinator.java` so command lifecycle is always captured. The `Commands` key in AdvantageScope will show a timeline of init and end events.
+  </Accordion>
+  <Accordion title="Sensor values">
+    Log frequently-changing sensor readings in `periodic()`. Use consistent hierarchical keys (`Subsystem/SensorName`) and include both raw and processed values when troubleshooting calibration.
+  </Accordion>
+  <Accordion title="State transitions">
+    Log entries at every state transition in the coordinator. Knowing when the robot entered a state and from what previous state is the fastest way to debug unexpected behavior.
+  </Accordion>
+  <Accordion title="Initialization and faults">
+    Use `Telemetry.print(message, PrintPriority.HIGH)` at the start and end of every init method and whenever a fault is detected. These messages appear in the DriverStation console and the structured log simultaneously.
+  </Accordion>
+</AccordionGroup>
+
+<CardGroup cols={2}>
+  <Card title="Simulation" icon="flask-conical" href="/systems/simulation">
+    How simulation shot trajectories are captured with Telemetry.log and visualized in AdvantageScope.
+  </Card>
+  <Card title="Architecture overview" icon="layers" href="/architecture/overview">
+    Where Telemetry fits in the three-layer codebase architecture.
+  </Card>
+</CardGroup>

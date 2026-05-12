@@ -1,0 +1,98 @@
+---
+title: "Programming tips and best practices for FRC"
+description: "Practical FRC Java tips from Spectrum 3847: when to use DoubleSupplier, how CachedDouble reduces CAN traffic, method chaining patterns, and 2026 code goals."
+---
+
+This page collects practical advice from Spectrum's 2026 season development experience — patterns that improve code quality, reduce bugs, and make the codebase easier to work on as a team.
+
+## DoubleSupplier vs double
+
+For most command factories and trigger factories in the `Mechanism` class, prefer `DoubleSupplier` arguments over raw `double` values.
+
+```java Prefer DoubleSupplier for dynamic values
+// Static double — value is locked in when the command is created
+Command runAtFixed = launcher.velocityCommand(() -> 3000.0);
+
+// DoubleSupplier — value is evaluated fresh each time the command runs
+TuneValue tuneVelocity = new TuneValue("Launcher/Velocity", 3000.0);
+Command runAtTunable = launcher.velocityCommand(tuneVelocity::get);
+```
+
+Using a `DoubleSupplier` means the command picks up live changes from NetworkTables (via `TuneValue`) or sensor readings without needing to be rescheduled. This is especially useful during tuning on hardware.
+
+## CachedDouble for CANbus efficiency
+
+Any sensor value read over the CAN bus (motor position, velocity, current) should be cached once per periodic loop rather than called multiple times per cycle.
+
+```java java
+// In subsystem periodic() — update once
+@Override
+public void periodic() {
+    cachedPosition.refresh();       // CAN read happens here
+    cachedVelocity.refresh();
+}
+
+// Elsewhere — read from cache (no CAN traffic)
+public double getPositionRotations() {
+    return cachedPosition.getValue();
+}
+```
+
+The `Mechanism` base class in SpectrumLib already does this for you — `getPosition()`, `getVelocityRPM()`, `getVoltage()`, and `getStatorCurrent()` all return `CachedDouble` values updated in `Mechanism.periodic()`. You only need to add your own `CachedDouble` for custom sensors outside the motor controller.
+
+## Method chaining with Triggers and Commands
+
+WPILib's `Trigger` and `Command` APIs are designed for fluent method chaining. Embrace this — it's more readable than intermediate variables for simple binding.
+
+```java java
+// Command chaining
+pilot.RT
+    .and(pilot.LT.negate())
+    .onTrue(applyState(State.INTAKE_FUEL));
+
+// Composed commands
+Command scoringSequence = indexer.feedToLauncher()
+    .andThen(launcher.shoot())
+    .withTimeout(2.0);
+```
+
+## Java workspace cleanup
+
+If VS Code shows red errors that don't match actual code problems (common after switching branches or pulling large changes):
+
+```bash
+# Option 1: Gradle clean
+./gradlew clean
+
+# Option 2: VS Code command palette
+# Ctrl+Shift+P → "Java: Clean Java Language Server Workspace"
+```
+
+## Coordinate systems
+
+FRC uses a specific field coordinate system that affects swerve drive, vision, and autonomous path planning:
+
+- **X axis**: Positive toward the opposing alliance wall
+- **Y axis**: Positive to the left when facing the opposing wall  
+- **Rotation**: Counter-clockwise positive (following right-hand rule)
+
+The WPILib pose estimator, PathPlanner, and Limelight all use this convention. Ensure any manual coordinate transformations respect these directions.
+
+## 2026 season code goals
+
+Spectrum's development priorities for 2026, which shape how the codebase is structured:
+
+<CardGroup cols={2}>
+  <Card title="Sim-first development" icon="computer">
+    Develop and validate all code in WPILib simulation before touching hardware. Robot time is reserved for tuning and final verification.
+  </Card>
+  <Card title="Trigger-based states" icon="bolt">
+    Replace large `CommandGroup` sequences with `Trigger`-driven states. Fewer nested command groups means easier debugging and more flexible behavior.
+  </Card>
+  <Card title="Multi-robot support" icon="copy">
+    One codebase runs on FM, XM, PM, and AM robots via the `Rio.id` config system. No robot-specific forks.
+  </Card>
+  <Card title="Improved logging" icon="chart-line">
+    DogLog and AdvantageScope for structured data capture, replay, and analysis across all test sessions.
+  </Card>
+</CardGroup>

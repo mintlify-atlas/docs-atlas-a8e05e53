@@ -1,0 +1,120 @@
+---
+title: "2026 REBUILT season: robot states and controls"
+description: "2026 REBUILT game reference: all State enum values, pilot and operator bindings from RobotStates.java, field zone triggers, vision hardware, and season goals."
+---
+
+This page covers everything specific to Spectrum 3847's 2026 FRC season competing in the game **REBUILT**. It documents the robot's operational states, driver and operator control bindings, vision hardware configuration, and the development workflow adopted for this season.
+
+## Robot states for REBUILT
+
+The `State` enum (in `frc.robot.State`) defines the high-level operational modes the robot can be in. `Coordinator.java` fans each state out to the appropriate subsystem commands simultaneously.
+
+| State | Description |
+|---|---|
+| `IDLE` | All mechanisms in neutral/home position. Default when no action is active. |
+| `INTAKE_FUEL` | Ground intake active — intake extended, bed and tower running, launcher idling. Triggered by pilot RT (when LT not held). |
+| `SNAKE_INTAKE` | Alternate intake mode. |
+| `TRACK_TARGET` | Chassis rotates toward the goal via `pilotAimAtTarget`; launcher spins up via `ShotCalculator`. Pilot X button (whileTrue). |
+| `TRACK_TARGET_WITH_NO_SWERVE` | Launcher tracks target speed but swerve does not auto-rotate. Used in autonomous shot prep. |
+| `LAUNCH_WITH_SQUEEZE` | Fire sequence — pilot LT (without RT). Advances fuel once `aimingAtTarget()` is true. |
+| `LAUNCH_WITH_SQUEEZE_WITH_NO_DELAY` | Immediate fire with no delay, triggered on RT release when LT is held. |
+| `LAUNCH_WITHOUT_SQUEEZE` | Fire sequence triggered by simultaneous LT+RT press. |
+| `AUTON_TRACK_TARGET` | Autonomous version of target tracking (bound to `Auton.autonShotPrep` event trigger). |
+| `AUTON_LAUNCH_WITH_SQUEEZE` | Autonomous launch (bound to `Auton.autonShoot` event trigger). |
+| `CUSTOM_SPEED_TURRET_LAUNCH` | Launches at a custom live-tunable velocity. Pilot start button (whileTrue). |
+| `UNJAM` | Recovery — clears jammed game pieces. Pilot A button (whileTrue). |
+| `FORCE_HOME` | Forces all mechanisms to home position. Pilot home+fn button combo. |
+| `COAST` | Motors set to coast mode (free-spinning). |
+| `BRAKE` | Motors set to brake mode (actively resist movement when idle). |
+| `TEST_INFINITE_LAUNCH` | Continuously launches fuel for calibration. Operator testX button. |
+| `TEST_IDLE` | Neutral test state for exercising individual subsystems. |
+
+## Driver controls layout
+
+### Pilot (driver) — left gamepad
+
+The pilot controls robot movement and initiates the primary game actions.
+
+| Input | Action |
+|---|---|
+| Left Stick | Field-relative translation (strafe + forward/back) |
+| Right Stick | Rotation |
+| RT (Right Trigger, press) | `INTAKE_FUEL` (when LT not held) |
+| LT (Left Trigger, press) | `LAUNCH_WITH_SQUEEZE` (when RT not held) |
+| LT + RT (simultaneously) | `LAUNCH_WITHOUT_SQUEEZE` |
+| RT release (while LT held) | `LAUNCH_WITH_SQUEEZE_WITH_NO_DELAY` |
+| LT release (while RT held) | `INTAKE_FUEL` |
+| LT or RT release (both released) | `IDLE` |
+| X button (whileTrue) | `TRACK_TARGET` — chassis aims at goal, flywheel spins up |
+| Start button (whileTrue) | `CUSTOM_SPEED_TURRET_LAUNCH` |
+| A button (whileTrue) | `UNJAM` |
+| Home + Fn combo | `FORCE_HOME` |
+| Home button | Clear state to `IDLE` |
+
+### Operator — right gamepad
+
+The operator stages the robot's next action and manages mechanism handoffs.
+
+| Input | Action |
+|---|---|
+| LB (held) | Enter game-piece scoring/manipulation mode |
+| LB + D-pad Left/Right | Select scoring location or orientation |
+| LB + A/B/X/Y | Select scoring level or handling sub-mode |
+| LB release | Return to home state |
+| Designated button | Initiate climb sequence |
+| Designated button | Mechanisms home/retract |
+
+### Auto-score flow
+
+The pilot and operator coordinate for autonomous-assisted scoring:
+
+<Steps>
+  <Step title="Operator stages the action">
+    Operator holds LB and selects target using D-pad or face buttons. The robot begins positioning.
+  </Step>
+  <Step title="Pilot presses action button (RB)">
+    Robot moves to action-ready position, aligns to the nearest AprilTag goal, and puts manipulators in prep position.
+  </Step>
+  <Step title="Pilot releases action button">
+    The robot autonomously selects optimal scoring parameters (front/back based on pose/angle) and executes the score. No driver aim required.
+  </Step>
+</Steps>
+
+## Field zone triggers
+
+`RobotStates.java` defines three field-position triggers used for conditional logic and autonomous behavior:
+
+```java java
+// From RobotStates.java
+public static final Trigger robotInNeutralZone   = swerve.inNeutralZone();
+public static final Trigger robotInEnemyZone     = swerve.inEnemyAllianceZone();
+public static final Trigger robotInFeedZone      = robotInEnemyZone.or(robotInNeutralZone);
+public static final Trigger robotInScoreZone     = robotInFeedZone.not();
+public static final Trigger launcherOnTarget     = LauncherStates.aimingAtTarget();
+```
+
+These triggers can be combined with any pilot/operator trigger to create conditional behaviors (e.g., only allow launching when `robotInScoreZone` is true).
+
+## Vision hardware for REBUILT
+
+| Hardware | Role |
+|---|---|
+| Limelight 4 (×1–2) | Primary AprilTag localization via MegaTag2 pose estimates |
+| Limelight 3 (×0–1) | Secondary vision tasks |
+| Orange Pi + PhotonVision | Game-piece (fuel) object detection |
+| QuestNav | Planned for advanced pose estimation / logging |
+
+The AprilTag field layout used: `AprilTagFields.k2026RebuiltWelded` (official 2026 REBUILT welded field layout).
+
+## Code architecture goals for 2026
+
+- **Sim-first**: All new features developed and validated in WPILib simulation before hardware testing
+- **Trigger-as-state**: Replace command group nesting with `Trigger`-bound state transitions
+- **Multi-robot**: Single codebase runs on FM2026 (competition), XM2026 (experimental), PM2026 (practice), AM2026
+- **Improved logging**: DogLog + AdvantageScope for full data replay capability
+- **CTRE 2026 swerve**: Full Phoenix 6 swerve integration with Kraken X60 FOC motors
+- **PathPlanner**: Autonomous routines with event markers; Choreo integration explored
+
+<Note>
+  This codebase is under active development during the 2026 season. Expect frequent changes to states, controls, and configurations as the robot is refined for competition.
+</Note>

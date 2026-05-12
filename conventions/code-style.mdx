@@ -1,0 +1,47 @@
+---
+title: "Code style guide: AOSP standards with Spotless"
+description: "Spectrum follows AOSP coding standards enforced by Spotless on every build — CamelCase classes, camelCase methods, 4-space indentation, and no m_ prefixes."
+---
+
+Spectrum standardizes all Java code on the **Android Open Source Project (AOSP) coding standards**. Spotless runs automatically on every Gradle build and reformats source files to match these rules, so style is enforced regardless of who wrote the code. You rarely need to think about formatting manually — but understanding the conventions helps you write code that looks right before the formatter touches it.
+
+## Spotless integration
+
+Spotless is wired into the Gradle build so that running `./gradlew build` reformats any non-conforming files in place. If a file is changed by Spotless, the build reports a formatting diff and succeeds on the next run. You can also trigger formatting alone:
+
+```bash
+./gradlew spotlessApply
+```
+
+The full AOSP style reference is at [source.android.com/docs/setup/contribute/code-style](https://source.android.com/docs/setup/contribute/code-style), though most of the rules you need day-to-day are summarized below.
+
+## Be consistent
+
+The most important rule is **consistency**. Before writing new code, spend a moment reading the surrounding code to understand its style. If the existing code spaces around `if` clauses, yours should too. If it uses a particular comment style, match it. Readers can focus on what the code does — not how it's formatted — only when the style is uniform throughout.
+
+> "If the code that you add to a file looks drastically different from the existing code around it, it throws readers out of rhythm when they read it. Try to avoid this." — AOSP Code Style
+
+## Capitalization conventions
+
+| Identifier type | Convention | Examples |
+|---|---|---|
+| Classes and interfaces | `CamelCase` (first letter uppercase) | `MyClass`, `MyInterface` |
+| Methods | `camelCase` (first letter lowercase) | `calculateAverage()`, `getStudentName()` |
+| Variables | `camelCase` (first letter lowercase) | `studentName`, `averageScore` |
+| True constants | `ALL_CAPS_WITH_UNDERSCORES` | `Math.PI` |
+
+<Warning>
+`ALL_CAPS` applies **only** to values that can never change under any circumstance. Tuning values and per-robot configuration (e.g., `wheelBaseInches`) are variables and must use `camelCase`, even if they feel "constant" in practice.
+</Warning>
+
+## Acronyms
+
+Treat acronyms as words and capitalize only the first letter. Write `HttpRequest`, not `HTTPRequest`; write `canId`, not `canID`.
+
+## No prefixes on variable names
+
+Do not add prefixes like `m_` to denote member variables. If you encounter this pattern in the codebase, it is likely inherited from an external library or team and should be renamed to remove the prefix when you touch that code.
+
+## Indentation
+
+Always use **4 spaces** for indentation — never tabs. This is one of the most common adjustments needed when importing code from external sources.

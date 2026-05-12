@@ -1,0 +1,101 @@
+---
+title: "Vision systems: Limelight and PhotonVision"
+description: "How Spectrum fuses Limelight MegaTag pose data and PhotonVision camera simulation into swerve odometry for accurate field localization in REBUILT."
+---
+
+The REBUILT robot uses two complementary vision approaches: Limelight 4 cameras that report AprilTag-based pose estimates via the MegaTag protocol, and a PhotonVision-based simulation layer (`VisionSystem.java`) that validates camera logic before hardware is available. Both feed pose corrections into WPILib's swerve pose estimator so the robot knows where it is on the field at all times.
+
+## Hardware
+
+The robot mounts Limelight 4 cameras at fixed positions defined in the robot CAD. Each Limelight has its own IP address and pipeline configuration managed through the Limelight web interface. The physical offset of each camera from the robot center — translation and rotation — must be entered in the Limelight web interface or set in code to produce accurate field-relative pose estimates.
+
+## MegaTag1 vs MegaTag2
+
+Limelight exposes two MegaTag pose formats:
+
+| Format | Method | Output type | Notes |
+|--------|--------|-------------|-------|
+| MegaTag1 | `getMegaTag1_Pose3d()` | `Pose3d` | Raw 3D pose; rotation can be ambiguous with fewer tags visible |
+| MegaTag2 | `getMegaTag2_Pose2d()` | `Pose2d` | Uses the Limelight 4's onboard gyro for rotation; preferred for odometry fusion |
+
+MegaTag2 is more reliable for continuous odometry correction because the LL4's internal gyro removes heading ambiguity that affects single-tag estimates.
+
+## Adding vision measurements
+
+Vision pose corrections are fed into the swerve pose estimator inside a subsystem `periodic()` method using the WPILib API:
+
+```java
+// Overload used in this codebase — timestamp is required, std devs use estimator defaults
+swerve.addVisionMeasurement(pose, timestampSeconds);
+
+// Full overload with explicit confidence tuning
+swerve.addVisionMeasurement(
+    pose,                        // Pose2d from getMegaTag2_Pose2d()
+    timestampSeconds,            // Capture timestamp, not current time
+    visionMeasurementStdDevs     // Matrix<N3,N1>: x, y, theta confidence
+);
+```
+
+The timestamp must reflect when the image was captured, not when the code runs. Limelight provides a latency value you subtract from the current FPGA timestamp.
+
+```java
+// Pattern from VisionSystem — getSimPose supplier is the swerve pose getter
+public VisionSystem(Pose2dSupplier getSimPose) {
+    this.getSimPose = getSimPose;
+    // ...
+}
+
+@Override
+public void simulationPeriodic() {
+    visionSim.update(getSimPose.getPose2d());
+}
+```
+
+## AprilTag field layout
+
+The simulation and localization code both reference the 2026 REBUILT field layout loaded by name from the WPILib resource bundle:
+
+```java
+AprilTagFieldLayout tagLayout =
+        AprilTagFieldLayout.loadField(AprilTagFields.k2026RebuiltWelded);
+visionSim.addAprilTags(tagLayout);
+```
+
+Using `k2026RebuiltWelded` ensures the tag positions in simulation and on the real field match exactly.
+
+## PhotonVision camera simulation
+
+`VisionSystem.java` creates a `VisionSystemSim` instance and registers simulated cameras with calibrated noise properties, allowing you to run vision logic in simulation without physical hardware:
+
+```java
+SimCameraProperties props = new SimCameraProperties();
+props.setCalibError(0.25, 0.08);   // mean error, std dev (pixels)
+props.setFPS(20.0);
+props.setAvgLatencyMs(35.0);
+props.setLatencyStdDevMs(5.0);
+```
+
+Front and back camera transforms are pre-defined. Uncomment the `PhotonCameraSim` lines in `VisionSystem.java` to activate simulated cameras when testing vision pipelines off-robot.
+
+## Pose alignment types
+
+<AccordionGroup>
+  <Accordion title="Tag area alignment">
+    Coarse alignment using the detected area and position of an AprilTag in the camera frame. Useful for driving directly toward a known target without a full pose estimate.
+  </Accordion>
+  <Accordion title="MegaTag pose alignment">
+    Full field-relative pose correction from the Limelight MegaTag2 estimate. This is the primary mechanism used in `VisionSystem` and feeds `addVisionMeasurement` on the swerve subsystem.
+  </Accordion>
+  <Accordion title="QuestNav (planned)">
+    A future enhancement that would use QuestNav's advanced pose estimation for robust localization when AprilTag visibility is sparse. Not implemented in the current codebase.
+  </Accordion>
+</AccordionGroup>
+
+<CardGroup cols={2}>
+  <Card title="Swerve and odometry" icon="compass" href="/architecture/subsystems-and-mechanisms">
+    How the swerve subsystem maintains and exposes the robot pose estimator.
+  </Card>
+  <Card title="Simulation" icon="flask-conical" href="/systems/simulation">
+    How PhotonVision camera simulation integrates with the broader RobotSim setup.
+  </Card>
+</CardGroup>

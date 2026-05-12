@@ -1,0 +1,117 @@
+---
+title: "PathPlanner autonomous routines for REBUILT"
+description: "How Spectrum builds, configures, and selects autonomous routines using PathPlanner paths with event markers and SmartDashboard chooser integration."
+---
+
+Autonomous mode runs for the first 15 seconds of each match without driver input. Spectrum uses PathPlanner to design robot paths visually and wire them to WPILib commands through `Auton.java`. The result is a set of named routines selectable from SmartDashboard before the match, each composed of path segments interleaved with mechanism commands.
+
+## PathPlanner concepts
+
+A PathPlanner **path** defines the physical trajectory the robot drives — a sequence of waypoints the robot passes through, along with velocity and rotation constraints. An **auto** is a higher-level sequence that chains multiple paths and commands together into a complete routine.
+
+| Concept | Description |
+|---------|-------------|
+| Waypoint | A field-relative position (and optional heading) the robot passes through |
+| Event marker | A named trigger attached to a position on the path that fires a command |
+| Auto | A named sequence of paths and commands stored in `deploy/pathplanner/` |
+
+Path and auto files are JSON files stored under `src/main/deploy/pathplanner/`. PathPlanner's desktop GUI writes these files; the robot code reads them at runtime using `PathPlannerAuto` and `PathPlannerPath`.
+
+## Event triggers
+
+`Auton.java` declares `EventTrigger` constants for each named event marker used in PathPlanner:
+
+```java
+public static final EventTrigger autonIntake    = new EventTrigger("intake");
+public static final EventTrigger autonShotPrep  = new EventTrigger("shotPrep");
+public static final EventTrigger autonShoot     = new EventTrigger("shoot");
+public static final EventTrigger autonClearState = new EventTrigger("clearState");
+public static final EventTrigger autonUnjam     = new EventTrigger("unjam");
+public static final EventTrigger autonPoseUpdate = new EventTrigger("poseUpdate");
+```
+
+When PathPlanner reaches a marker named `"intake"` during path execution, `autonIntake` fires and any commands bound to it via `.onTrue()` run automatically.
+
+## Running a PathPlanner auto
+
+`SpectrumAuton` wraps `PathPlannerAuto` with a short 10 ms settling delay and supports optional mirroring for field symmetry:
+
+```java
+public Command SpectrumAuton(String autoName, boolean mirrored) {
+    Command autoCommand = new PathPlannerAuto(autoName, mirrored);
+    return Commands.waitSeconds(0.01).andThen(autoCommand).withName(autoName);
+}
+```
+
+Routines compose `SpectrumAuton` segments with a `launch()` command that aims and fires before the next path begins:
+
+```java
+public Command TBTB(boolean mirrored) {
+    return Commands.sequence(
+                    SpectrumAuton("TBTB 1", mirrored),
+                    launch(),
+                    SpectrumAuton("TBTB 2", mirrored),
+                    launch(),
+                    SpectrumAuton("TBTB 3", mirrored))
+            .withName("TBTB Full - " + (mirrored ? "Right" : "Left"));
+}
+```
+
+## SmartDashboard chooser
+
+`setupSelectors()` populates a `SendableChooser<Command>` and pushes it to SmartDashboard under the key `"Auto Chooser"`:
+
+```java
+pathChooser.setDefaultOption("Do Nothing", doNothing());
+
+pathChooser.addOption("TBTB Left",  TBTB(false));
+pathChooser.addOption("TBTB Right", TBTB(true));
+pathChooser.addOption("TBTT Left",  TBTT(false));
+// ...
+
+SmartDashboard.putData("Auto Chooser", pathChooser);
+```
+
+The selected command is retrieved in `autonomousInit` via `getAutonomousCommand()`, which falls back to a print command if no selection is found.
+
+## Available routines
+
+The routines use letter codes where **T** = top fuel zone and **B** = bottom fuel zone, indicating the order of field zones visited per path segment:
+
+| Routine | Sides | Description |
+|---------|-------|-------------|
+| `TBTB` | Left / Right | Four-segment top-bottom alternating routine |
+| `TBTT` | Left / Right | Three-segment variant ending top-top |
+| `TTTT` | Left / Right | Four-segment top-only routine |
+| `BBBB` | Left / Right | Two-launch bottom-heavy routine |
+| `Optional - TBT` | Left / Right | Three-segment with configurable delay |
+| `Optional - BBB` | Left / Right | Three-segment bottom routine |
+| `2nd Man - TBTB` | Left / Right | Delayed start for alliance coordination |
+| `2nd Man - BBD` | Left / Right | Delayed start bottom variant |
+
+Routines marked "2nd Man" add a `SECOND_MAN_DELAY` (1.0 s) at the start so a partner robot can clear the zone first.
+
+## Dynamic pathfinding
+
+For situations that require navigating to an arbitrary field pose at runtime, `Auton.java` exposes a pathfinding helper:
+
+```java
+public static Command pathfindingCommandToPose(
+        double xPos, double yPos, double rotation, double vel, double accel) {
+    Pose2d targetPose = new Pose2d(xPos, yPos, Rotation2d.fromDegrees(rotation));
+    PathConstraints constraints = new PathConstraints(
+            vel, accel,
+            Units.degreesToRadians(540),
+            Units.degreesToRadians(720));
+    return AutoBuilder.pathfindToPoseFlipped(targetPose, constraints, 0.0);
+}
+```
+
+<CardGroup cols={2}>
+  <Card title="Robot states" icon="toggle-on" href="/architecture/robot-states">
+    How EventTrigger results connect to the Coordinator and subsystem commands.
+  </Card>
+  <Card title="Project structure" icon="folder-tree" href="/project-structure">
+    Where PathPlanner path files live in the deploy directory.
+  </Card>
+</CardGroup>

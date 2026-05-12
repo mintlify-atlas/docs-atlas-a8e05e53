@@ -1,0 +1,266 @@
+---
+title: "Command-based programming in WPILib"
+description: "Understand WPILib's command-based paradigm — Subsystems, Commands, Triggers, and the scheduler — as implemented in the 2026 Spectrum 3847 robot codebase."
+---
+
+WPILib's command-based framework is the standard architecture for FRC robot code. Rather than writing one giant loop that manually checks every sensor and actuates every motor, you decompose robot behavior into small, composable units called **Commands**, attach them to hardware abstractions called **Subsystems**, and let the **CommandScheduler** coordinate their execution. The Spectrum 3847 2026 robot is built entirely on this framework, with an additional pattern layered on top: Triggers that represent named robot states.
+
+## Subsystems
+
+A subsystem represents a physical mechanism — intake, launcher, hood, swerve drivetrain. It owns the hardware objects (motors, sensors, encoders) and exposes methods that Commands can call.
+
+Every subsystem has a `periodic()` method called automatically by the scheduler every 20 ms (50 times per second), regardless of which commands are running. Use it for telemetry, sensor updates, and state logging:
+
+```java
+@Override
+public void periodic() {
+    // Called 50 times per second by the CommandScheduler
+    Telemetry.log("FuelIntake/Position", getPosition());
+    Telemetry.log("FuelIntake/Velocity", getVelocity());
+}
+```
+
+The `Robot.java` constructor instantiates every subsystem once and stores it as a static field, so any class can retrieve it with a getter:
+
+```java
+// Robot.java
+fuelIntake      = new FuelIntake(config.fuelIntake);
+intakeExtension = new IntakeExtension(config.intakeExtension);
+launcher        = new Launcher(config.launcher);
+hood            = new Hood(config.hood);
+indexerTower    = new IndexerTower(config.indexerTower);
+indexerBed      = new IndexerBed(config.indexerBed);
+swerve          = new Swerve(config.swerve);
+```
+
+```java
+// Anywhere else in the codebase
+private static final Launcher launcher = Robot.getLauncher();
+```
+
+## Commands
+
+A Command is a unit of robot action. It has a defined lifecycle — `initialize()`, `execute()` (called every loop), `end()`, and `isFinished()`. WPILib provides factory methods for the most common patterns so you rarely implement these methods directly:
+
+<Tabs>
+  <Tab title="InstantCommand / runOnce">
+
+Runs a single action and immediately finishes. Use for state changes, one-shot actuations, and resetting values:
+
+```java
+// Apply a robot state in one shot
+Commands.runOnce(() -> {
+    appliedState = state;
+    coordinator.applyRobotState(state);
+}).withName("APPLYING STATE: " + state);
+```
+
+  </Tab>
+  <Tab title="RunCommand / run">
+
+Runs an action on every loop iteration until interrupted. Use for continuous control like driving or tracking a target:
+
+```java
+// Drive with joystick input continuously
+Commands.run(() -> swerve.drive(pilot.getX(), pilot.getY(), pilot.getRotation()), swerve);
+```
+
+  </Tab>
+  <Tab title="Command factories">
+
+Subsystems expose static factory methods that return pre-built commands. This keeps command logic close to the hardware it controls:
+
+```java
+// In LauncherStates.java
+public static Command spinUp(DoubleSupplier speedSupplier) {
+    return launcher.run(() -> launcher.setSpeed(speedSupplier.getAsDouble()))
+                   .withName("Launcher: SpinUp");
+}
+```
+
+  </Tab>
+  <Tab title="Command composition">
+
+WPILib provides combinators to build complex behaviors from simple commands:
+
+```java
+// Run two commands at the same time
+Commands.parallel(launcher.spinUp(), hood.aimAtTarget());
+
+// Run commands one after another
+Commands.sequence(
+    applyState(State.TRACK_TARGET),
+    Commands.waitSeconds(1),
+    applyState(State.LAUNCH_WITH_SQUEEZE)
+);
+
+// Choose between two commands at runtime
+Commands.either(
+    applyState(State.INTAKE_FUEL),
+    Commands.none(),
+    pilot.LT.negate()  // condition: LT is NOT pressed
+);
+```
+
+  </Tab>
+</Tabs>
+
+## The CommandScheduler
+
+The `CommandScheduler` is the heartbeat of the command-based framework. It runs inside `robotPeriodic()`, which executes every 20 ms:
+
+```java
+// Robot.java — called every loop iteration
+@Override
+public void robotPeriodic() {
+    CommandScheduler.getInstance().run();
+    // ...
+}
+```
+
+On each call, the scheduler:
+
+<Steps>
+  <Step title="Polls all registered Triggers">
+    Checks every button and Trigger to see if their state changed since the last loop.
+  </Step>
+  <Step title="Schedules new commands">
+    Any Trigger whose condition became true schedules its associated command.
+  </Step>
+  <Step title="Runs active commands">
+    Calls `execute()` on every currently-running command and checks `isFinished()`.
+  </Step>
+  <Step title="Calls subsystem periodic()">
+    Invokes `periodic()` on every registered subsystem, whether or not it has an active command.
+  </Step>
+  <Step title="Handles interrupts and conflicts">
+    If two commands require the same subsystem, the scheduler cancels the older one unless it is non-interruptible.
+  </Step>
+</Steps>
+
+When modes switch (teleop → disabled → auton), `resetCommandsAndButtons()` cancels all running commands and re-registers all Triggers:
+
+```java
+public void resetCommandsAndButtons() {
+    CommandScheduler.getInstance().cancelAll();
+    CommandScheduler.getInstance().getActiveButtonLoop().clear();
+
+    pilot.resetConfig();
+    operator.resetConfig();
+
+    setupStates();           // subsystem-level bindings
+    RobotStates.setupStates(); // robot-level state bindings
+}
+```
+
+## Triggers
+
+A `Trigger` is a boolean condition that the scheduler polls every loop. When the condition changes, the Trigger fires its associated command. Triggers can be composed with boolean logic just like conditions in an `if` statement:
+
+```java
+// Compose triggers with .and(), .or(), .not()
+public static final Trigger robotInNeutralZone = swerve.inNeutralZone();
+public static final Trigger robotInEnemyZone   = swerve.inEnemyAllianceZone();
+public static final Trigger robotInFeedZone    = robotInEnemyZone.or(robotInNeutralZone);
+public static final Trigger robotInScoreZone   = robotInFeedZone.not();
+```
+
+The three most common binding methods are:
+
+| Method | When it fires | Typical use |
+|--------|--------------|-------------|
+| `onTrue(cmd)` | Once, when condition becomes true | Apply a state, start a sequence |
+| `onFalse(cmd)` | Once, when condition becomes false | Return to IDLE, clean up |
+| `whileTrue(cmd)` | Every loop while condition is true, cancels on false | Continuous tracking, holding a position |
+
+## How Spectrum uses Triggers as states
+
+The key design pattern in the Spectrum 2026 codebase is treating robot states as Triggers. The `RobotStates.setupStates()` method binds every gamepad button and autonomous event to a named `State` enum value through `applyState()`:
+
+```java
+// RobotStates.java
+public static void setupStates() {
+
+    // Pilot RT alone → intake fuel
+    pilot.RT.onTrue(
+        Commands.either(applyState(State.INTAKE_FUEL), Commands.none(), pilot.LT.negate()));
+
+    // Pilot LT alone → launch with squeeze
+    pilot.LT.onTrue(
+        Commands.either(
+            applyState(State.LAUNCH_WITH_SQUEEZE), Commands.none(), pilot.RT.negate()));
+
+    // Both LT + RT → launch without squeeze
+    pilot.LT.and(pilot.RT).onTrue(applyState(State.LAUNCH_WITHOUT_SQUEEZE));
+
+    // X button held → track target continuously
+    pilot.XButton.whileTrue(applyState(State.TRACK_TARGET));
+    pilot.XButton.onFalse(applyState(State.IDLE));
+
+    // A button held → unjam
+    pilot.AButton.whileTrue(applyState(State.UNJAM));
+    pilot.AButton.onFalse(applyState(State.IDLE));
+
+    // Auton triggers
+    Auton.autonIntake.onTrue(applyState(State.INTAKE_FUEL));
+    Auton.autonShoot.onTrue(applyState(State.LAUNCH_WITH_SQUEEZE));
+    Auton.autonUnjam.onTrue(
+        Commands.sequence(
+            applyState(State.UNJAM),
+            Commands.waitSeconds(1),
+            applyState(State.LAUNCH_WITH_SQUEEZE)));
+}
+```
+
+`applyState()` is a command factory that stores the active state and delegates to the `Coordinator`, which fans the state out to every affected subsystem:
+
+```java
+public static Command applyState(State state) {
+    return Commands.runOnce(() -> {
+        appliedState = state;
+        coordinator.applyRobotState(state);
+    }).withName("APPLYING STATE: " + state);
+}
+```
+
+The `State` enum lists every valid robot state. This makes it impossible to pass an invalid state — the compiler rejects anything not in the enum:
+
+```java
+public enum State {
+    IDLE,
+    INTAKE_FUEL,
+    TRACK_TARGET,
+    LAUNCH_WITH_SQUEEZE,
+    LAUNCH_WITH_SQUEEZE_WITH_NO_DELAY,
+    LAUNCH_WITHOUT_SQUEEZE,
+    CUSTOM_SPEED_TURRET_LAUNCH,
+    UNJAM,
+    FORCE_HOME,
+    COAST,
+    BRAKE,
+    TEST_INFINITE_LAUNCH,
+    TEST_IDLE;
+}
+```
+
+Zone-based triggers derived from swerve odometry show how Triggers can react to robot position rather than buttons:
+
+```java
+public static final Trigger launcherOnTarget = LauncherStates.aimingAtTarget();
+
+// Automatically logs trigger state without any manual if/else
+bindTriggerTelemetry("LauncherPrep/LauncherOnTarget", launcherOnTarget);
+```
+
+<Note>
+The `bindTriggerTelemetry` helper wires `onTrue` and `onFalse` to log `true`/`false` to the telemetry system, keeping dashboards in sync with trigger state automatically rather than polling in `periodic()`.
+</Note>
+
+<CardGroup cols={2}>
+  <Card title="Java fundamentals" icon="code" href="/frc-basics/java-fundamentals">
+    Review the Java building blocks that underpin commands and subsystems.
+  </Card>
+  <Card title="Applying Java to FRC" icon="robot" href="/frc-basics/applied-to-frc">
+    See which Java constructs are commonly used and how commands replace traditional loops.
+  </Card>
+</CardGroup>

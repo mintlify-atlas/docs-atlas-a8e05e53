@@ -1,0 +1,112 @@
+---
+title: "Exception handling patterns in robot code"
+description: "Exception handling rules for FRC robot code: no empty catch blocks, specific exceptions only, null/bounds guards, and the isAttached() hardware safety pattern."
+---
+
+Robot code runs in a hard real-time loop where an unhandled exception can crash the entire program mid-match. Spectrum follows a set of exception handling conventions that keep errors visible and recoverable without hiding bugs behind silent failures.
+
+## Core rules
+
+<AccordionGroup>
+  <Accordion title="Never use empty catch clauses">
+    An empty `catch` block swallows exceptions silently, making bugs nearly impossible to debug. At minimum, log the exception or print its stack trace.
+
+    ```java Bad — hides errors completely
+    try {
+        int value = mySensor.getValue();
+    } catch (IOException e) {
+        // ← Don't do this
+    }
+    ```
+
+    ```java Good — always log the exception
+    try {
+        int value = mySensor.getValue();
+    } catch (IOException e) {
+        System.err.println("Sensor read failed: " + e.getMessage());
+        Telemetry.print("SensorError: " + e.getMessage());
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Catch specific exceptions, not generic ones">
+    Catching `Exception` or `Throwable` generically can suppress critical runtime errors like `NullPointerException` or `ClassCastException` that should terminate or be handled specifically.
+
+    ```java Avoid generic catch
+    } catch (Exception e) { // Too broad — masks real bugs
+        e.printStackTrace();
+    }
+    ```
+
+    ```java Prefer specific exceptions
+    } catch (IOException e) {
+        // Handle I/O failure specifically
+    } catch (TimeoutException e) {
+        // Handle timeout specifically
+    }
+    ```
+
+    <Warning>
+      Only catch `Exception` generically as a last resort in outer safety wrappers, and always log the full stack trace when you do.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="Guard against null and array bounds before access">
+    `NullPointerException` and `ArrayIndexOutOfBoundsException` are the most common robot-crashing exceptions. Prevent them with conditional checks before accessing values.
+
+    ```java java
+    // Null check before method call
+    if (myObject != null) {
+        myObject.doSomething();
+    }
+
+    // Bounds check before array access
+    if (index >= 0 && index < array.length) {
+        int value = array[index];
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Use try-catch for unpredictable hardware operations">
+    Network communication, sensor reads, and CAN bus operations can fail unpredictably. Wrap these with `try-catch` and fall back to a safe default value.
+
+    ```java java
+    try {
+        double distance = distanceSensor.getDistanceMeters();
+        cachedDistance.update(distance);
+    } catch (RuntimeException e) {
+        System.err.println("Distance sensor error: " + e.getMessage());
+        // cachedDistance keeps its last good value
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Custom exception classes
+
+SpectrumLib's `util/exceptions/` package provides custom exception types for robot-specific error conditions. Use these instead of generic exceptions when throwing from library code so callers can catch them specifically.
+
+```java java
+// Custom exception example pattern (from spectrumLib/util/exceptions/)
+public class MechanismNotAttachedException extends RuntimeException {
+    public MechanismNotAttachedException(String mechanismName) {
+        super("Mechanism not attached: " + mechanismName);
+    }
+}
+```
+
+## The isAttached pattern
+
+Mechanism hardware errors are often pre-empted entirely by the `isAttached()` guard in `Mechanism.java`. If a mechanism is not attached (i.e., the hardware is not present on this robot configuration), all control calls are no-ops and sensor reads return safe defaults — no exception needed.
+
+```java java
+// From Mechanism.java — hardware calls are gated by isAttached
+public void setVoltage(double volts) {
+    if (!config.isAttached()) return; // Safe no-op
+    motor.setVoltage(volts);
+}
+```
+
+<Tip>
+  Prefer the `isAttached` pattern for optional hardware over `try-catch` around motor calls. It's cleaner and avoids CTRE library exceptions entirely.
+</Tip>

@@ -1,0 +1,125 @@
+---
+title: "Class generation and Lombok annotation patterns"
+description: "How Spectrum uses Lombok (@Getter, @Setter, @RequiredArgsConstructor) to reduce boilerplate and maintain consistent class structure in the robot codebase."
+---
+
+Spectrum uses [Project Lombok](https://projectlombok.org/) to eliminate repetitive Java boilerplate and keep class definitions focused on logic rather than accessor plumbing. Lombok annotations are processed at compile time, so the generated methods appear in the compiled `.class` files even though they are absent from the `.java` source. Understanding which annotations are in use — and why — makes reading the codebase significantly easier.
+
+## @Getter and @Setter
+
+`@Getter` generates a public `getFieldName()` method. `@Setter` generates a public `setFieldName(Type value)` method. Both can be applied at the class level (generating accessors for every field) or at the field level (generating an accessor for one field).
+
+Without Lombok, a two-field class requires eight lines of boilerplate:
+
+```java
+public class MyClass {
+    private String name;
+    private int id;
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public int getId() {
+        return id;
+    }
+
+    public void setId(int id) {
+        this.id = id;
+    }
+}
+```
+
+With Lombok, the same class is four lines:
+
+```java
+import lombok.Getter;
+import lombok.Setter;
+
+@Getter
+@Setter
+public class MyClass {
+    private String name;
+    private int id;
+}
+```
+
+Lombok generates `getName()`, `setName()`, `getId()`, and `setId()` automatically during compilation.
+
+## Chained setters with @Accessors(chain = true)
+
+By default, Lombok's `@Setter` methods return `void`. Setter chaining — where each setter returns `this` so calls can be linked — is **not** available unless the class is explicitly annotated with `@Accessors(chain = true)`:
+
+```java
+import lombok.Getter;
+import lombok.Setter;
+import lombok.experimental.Accessors;
+
+@Getter
+@Setter
+@Accessors(chain = true)
+public class MyClass {
+    private String name;
+    private int id;
+}
+```
+
+With chaining enabled, object initialization reads like a fluent builder:
+
+```java
+MyClass obj = new MyClass()
+    .setName("New Name")
+    .setId(123);
+```
+
+<Warning>
+Only use chained setters in classes that are explicitly annotated with `@Accessors(chain = true)`. Do not assume chaining is available by default.
+</Warning>
+
+## Constructor overloading
+
+Avoid overloading constructors unless an object can be meaningfully constructed from genuinely different *types* of parameters. When multiple constructors are necessary, use constructor chaining (`this(...)`) to delegate to a single canonical constructor rather than duplicating initialization logic. For objects with many optional parameters, prefer the **Builder Pattern** over a growing list of overloaded constructors.
+
+## Method structure
+
+### Extract long conditionals
+
+If an `if` statement spans more than roughly three conditions or lines, extract the logic into a named helper method. A well-named method communicates intent more clearly than an inline boolean expression.
+
+### Use parameters explicitly
+
+Pass values through parameters rather than relying on implicit state. Explicit parameters make methods easier to read, test, and reuse.
+
+### Avoid unnecessary loops
+
+When a mathematical expression can replace a loop, prefer the expression. Iterating an array to derive a value that could be computed algebraically adds unnecessary complexity.
+
+## JavaDoc comments
+
+Every class and every non-trivial public method must have a JavaDoc comment with at least one sentence that starts with a third-person descriptive verb:
+
+```java
+/**
+ * Calculates the average velocity across all drive modules.
+ *
+ * @param velocities array of per-module velocity readings in m/s
+ * @return mean velocity in m/s
+ */
+public double calculateAverageVelocity(double[] velocities) { ... }
+```
+
+Use `/** ... */` syntax for JavaDoc. Describe what the class or method does, its parameters, return values, and any exceptions. GitHub Copilot can assist in generating initial JavaDoc drafts, but review generated comments for accuracy.
+
+## TODO comments
+
+Mark incomplete or improvable code with `TODO` comments so they surface in the VS Code task panel:
+
+```java
+// TODO: Replace linear interpolation with a lookup table once data is collected.
+```
+
+Use `TODO` for code that is temporary, a short-term solution, or functional but known to need improvement.

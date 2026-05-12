@@ -1,0 +1,126 @@
+---
+title: "Fuel intake and indexer mechanism guide"
+description: "How the FuelIntake, IntakeExtension, IndexerBed, and IndexerTower subsystems collect and route game pieces from ground to launcher in the REBUILT game."
+---
+
+Fuel game pieces travel through four coordinated subsystems before reaching the launcher: the `FuelIntake` roller pulls pieces off the ground, the `IntakeExtension` arm positions the intake at the correct height, the `IndexerBed` conveys pieces across the robot chassis, and the `IndexerTower` lifts them into the launcher. Each subsystem is an independent `Mechanism` wrapping a TalonFX and follows the same States-based command pattern.
+
+## Subsystem roles
+
+<AccordionGroup>
+  <Accordion title="FuelIntake — ground collection">
+    The `FuelIntake` subsystem runs one primary TalonFX (CAN ID 5, RIO bus) with a follower motor. It operates in Torque-FOC current control for intake and eject commands.
+
+    | State method | Behavior |
+    |---|---|
+    | `intakeFuel()` | Full torque intake at `fuelIntakeTorqueCurrent` (130 A) |
+    | `slowIntakeFuel()` | Reduced torque at `fuelSlowIntakeTorqueCurrent` (45 A) |
+    | `agitateFuel()` | Repeating sequence: intake torque for a cycle, then 0.5 s pause |
+    | `ejectCommand()` | Reverse torque at −50 A to clear jams |
+    | `neutral()` / `stop()` | Zero voltage / stop motor |
+
+    ```java FuelIntakeStates.java
+    public static void intakeFuel() {
+        scheduleIfNotRunning(
+                intake.runTorqueFOC(config::getFuelIntakeTorqueCurrent)
+                        .withName("Intake.intakeFuel"));
+    }
+
+    public static void agitateFuel() {
+        scheduleIfNotRunning(
+                Commands.repeatingSequence(
+                                intake.runTorqueFOC(config::getFuelAgitationTorqueCurrent),
+                                Commands.waitSeconds(0.5))
+                        .withName("Intake.agitate"));
+    }
+    ```
+  </Accordion>
+  <Accordion title="IndexerBed — chassis conveyor">
+    The `IndexerBed` subsystem (CAN ID 8, CANIVORE) moves fuel across the robot bed from the intake roller toward the tower. It uses velocity Torque-FOC control and includes a follower motor aligned in opposition.
+
+    | State method | Behavior |
+    |---|---|
+    | `indexMax()` | Full feed velocity (`IndexerBedFeedRPM`, tunable) |
+    | `slowIndex()` | Reduced feed at `indexerSlowVelocityRPM` (1000 RPM) |
+    | `unjam()` / `unjamCommand()` | Reverse at `indexerUnjamRPM` (−2000 RPM) |
+    | `neutral()` | Zero voltage |
+
+    ```java IndexerBedStates.java
+    public static void indexMax() {
+        scheduleIfNotRunning(
+                indexerBed
+                        .runVelocityTcFocRPM(config.getIndexerBedFeedRPM())
+                        .withName("IndexerBed.feedMax"));
+    }
+
+    public static Command unjamCommand() {
+        return indexerBed.runVelocityTcFocRPM(config::getIndexerUnjamRPM);
+    }
+    ```
+  </Accordion>
+  <Accordion title="IndexerTower — vertical lift to launcher">
+    The `IndexerTower` subsystem lifts fuel vertically into the launcher. It mirrors the `IndexerBed` command structure and adds `quickReverseThenIndex`, which momentarily reverses (1 s) before resuming feed — useful for clearing a brief jam without triggering a full `UNJAM` state.
+
+    ```java IndexerTowerStates.java
+    public static void quickReverseThenIndex() {
+        scheduleIfNotRunning(
+                Commands.sequence(
+                        indexerTower.runVelocityTcFocRPM(config::getIndexerUnjamRPM).withTimeout(1),
+                        indexerTower.runVelocityTcFocRPM(config.getIndexerTowerFeedRPM())));
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## hasFuel() sensor trigger
+
+`IndexerBed` exposes a `hasFuel()` trigger that reads a beam-break or proximity sensor to detect whether a fuel game piece is present in the bed. Other subsystems and `RobotStates` use this trigger to gate commands — for example, to stop the intake roller once the indexer is loaded, or to allow the launcher to fire.
+
+```java RobotStates.java (conceptual binding)
+// Only advance the tower once the bed detects fuel
+IndexerBedStates.hasFuel().onTrue(IndexerTowerStates.slowIndexCommand());
+```
+
+<Note>
+  `hasFuel()` is documented in the season guide as `indexerBed.hasFuel()`. Consult `IndexerBed.java` for the sensor wiring and debounce configuration.
+</Note>
+
+## INTAKE_FUEL coordination via Coordinator
+
+When the `Coordinator` applies the `INTAKE_FUEL` state it calls into each States class simultaneously:
+
+| Subsystem | State applied |
+|---|---|
+| `FuelIntake` | `intakeFuel()` |
+| `IntakeExtension` | `fullExtend()` |
+| `IndexerBed` | `indexMax()` or `slowIndex()` |
+| `IndexerTower` | `neutral()` (waiting for bed to fill) |
+| `Launcher` | `idlePrep()` (spinning up to idle RPM) |
+
+This means no single subsystem's States file is responsible for orchestrating the full intake sequence — the `Coordinator` drives them all from the top-level `State` enum.
+
+## Default commands and scheduleIfNotRunning
+
+Every States class uses `scheduleIfNotRunning` to avoid interrupting the currently running command with an identical one. This pattern prevents command churn when `Coordinator` repeatedly applies the same state on each loop iteration.
+
+```java FuelIntakeStates.java
+public static void scheduleIfNotRunning(Command command) {
+    CommandScheduler commandScheduler = CommandScheduler.getInstance();
+    Command current = commandScheduler.requiring(intake);
+    if (current != command) {
+        commandScheduler.schedule(command);
+    }
+}
+```
+
+<CardGroup cols={2}>
+  <Card title="FuelIntake source" icon="code" href="https://github.com/spectrum3847/2026-Spectrum/blob/main/src/main/java/frc/robot/fuelIntake/FuelIntake.java">
+    Motor config, follower setup, and simulation roller config.
+  </Card>
+  <Card title="IndexerBed source" icon="layer-group" href="https://github.com/spectrum3847/2026-Spectrum/blob/main/src/main/java/frc/robot/indexerBed/IndexerBed.java">
+    Bed conveyor motor config and velocity PID gains.
+  </Card>
+  <Card title="IndexerTower source" icon="arrow-up" href="https://github.com/spectrum3847/2026-Spectrum/blob/main/src/main/java/frc/robot/indexerTower/IndexerTower.java">
+    Tower lift motor config and quickReverseThenIndex logic.
+  </Card>
+</CardGroup>

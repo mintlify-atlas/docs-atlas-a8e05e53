@@ -1,0 +1,210 @@
+---
+title: "Running one codebase on multiple physical robots"
+description: "How Spectrum selects FM2026, PM2026, or PHOTON2026 at startup via Rio.java serial number lookup, with AM2026 and XM2026 available as additional config classes."
+---
+
+Spectrum 3847 operates several physical robots from the same codebase simultaneously throughout the season. Rather than maintaining separate code branches per robot, the codebase selects a `Config` object at startup based on which RoboRIO is running the code. Every subsystem-level difference — encoder offsets, attached mechanisms, and tuning constants — is encapsulated in that single config object.
+
+## Why multiple configs exist
+
+Different robots in the shop serve different purposes:
+
+| Robot | Config class | Purpose |
+|---|---|---|
+| Final Machine | `FM2026` | Competition robot; all mechanisms attached |
+| Practice Machine | `PM2026` | Practice chassis; matches FM hardware except `hood` |
+| Experimental Machine | `XM2026` | Prototype testbed; subset of mechanisms attached |
+| Alpha Machine | `AM2026` | Early-season prototype; minimal hardware |
+| Photon Test Chassis | `PHOTON2026` | Vision and drivetrain development |
+
+Running identical code on all robots eliminates the risk of a configuration diverging between practice and competition.
+
+## How Rio.id resolves a config at startup
+
+`Rio` is an enum in `frc.spectrumLib`. Each entry stores the RoboRIO serial number printed on the label on the back of the controller. On startup, `Rio.checkID()` reads the live serial number via `RobotController.getSerialNumber()` and looks it up in a static map. The result is stored in the public constant `Rio.id`.
+
+```java Rio.java
+public enum Rio {
+
+    // 2026 Robots
+    PHOTON2026("032B4BB3", true),
+    PM_2026("0329AD07", true),
+    // FM_2026("", true),
+
+    // 2025 Robots
+    FM_2025("0329F2D1", true),
+
+    SIM("", true),
+    UNKNOWN(null, true);
+
+    // ...
+
+    public static final Rio id = checkID();
+
+    private static Rio checkID() {
+        String serialNumber = RobotBase.isReal()
+                ? RobotController.getSerialNumber()
+                : "";
+
+        if (IDs.containsKey(serialNumber)) {
+            Rio id = IDs.get(serialNumber);
+            rioIdAlert.setText("Rio: " + id.name());
+            rioIdAlert.set(true);
+            return id;
+        }
+        rioIdUnknown.set(true);
+        return UNKNOWN;
+    }
+}
+```
+
+In simulation, `getSerialNumber()` is never called (it crashes via JNI in test environments). The serial number defaults to `""`, which matches the `SIM` entry.
+
+`Robot`'s constructor switches on `Rio.id` and constructs the matching config:
+
+```java Robot.java
+switch (Rio.id) {
+    case PHOTON2026:
+        config = new PHOTON2026();
+        break;
+    case PM_2026:
+        config = new PM2026();
+        break;
+    default: // SIM and UNKNOWN
+        config = new FM2026();
+        break;
+}
+```
+
+<Note>
+  If a RoboRIO's serial number is not registered in the `Rio` enum, `Rio.id` resolves to `UNKNOWN`, and the `default` branch of the switch selects `FM2026`. An error-level dashboard alert is raised so the discrepancy is immediately visible.
+</Note>
+
+## Config class structure
+
+All config classes extend `Robot.Config`, which declares one sub-config field per subsystem using default-constructed values.
+
+```java Robot.java (inner class)
+public static class Config {
+    public SwerveConfig swerve = new SwerveConfig();
+    public PilotConfig pilot = new PilotConfig();
+    public OperatorConfig operator = new OperatorConfig();
+    public FuelIntakeConfig fuelIntake = new FuelIntakeConfig();
+    public IntakeExtensionConfig intakeExtension = new IntakeExtensionConfig();
+    public IndexerTowerConfig indexerTower = new IndexerTowerConfig();
+    public IndexerBedConfig indexerBed = new IndexerBedConfig();
+    public LauncherConfig launcher = new LauncherConfig();
+    public HoodConfig hood = new HoodConfig();
+    public VisionConfig vision = new VisionConfig();
+}
+```
+
+Each robot-specific class overrides only what differs. For example, `FM2026` configures all encoder offsets and marks every mechanism as attached:
+
+```java FM2026.java
+public class FM2026 extends Config {
+
+    public FM2026() {
+        super();
+        swerve.configEncoderOffsets(-0.163818359375, 0.24902, 0.2724609375, -0.31005859375);
+
+        pilot.setAttached(true);
+        operator.setAttached(true);
+        fuelIntake.setAttached(true);
+        intakeExtension.setAttached(true);
+        launcher.setAttached(true);
+        indexerTower.setAttached(true);
+        indexerBed.setAttached(true);
+        hood.setAttached(true);
+    }
+}
+```
+
+## The setAttached() pattern
+
+Each per-subsystem config class (e.g. `LauncherConfig`) extends `Mechanism.Config`, which carries an `attached` boolean field. `setAttached(false)` disables hardware initialization for that subsystem — no CAN messages are sent, no motor objects are created, and all sensor reads return `0`.
+
+This makes it straightforward to express exactly which hardware a given robot carries. Compare `FM2026` (all mechanisms attached) with `AM2026` (alpha machine, fewer mechanisms):
+
+```java AM2026.java
+public class AM2026 extends Config {
+
+    public AM2026() {
+        super();
+        swerve.configEncoderOffsets(0.289551, 0.394043, -0.203857, -0.039307);
+
+        pilot.setAttached(true);
+        operator.setAttached(true);
+        fuelIntake.setAttached(false);
+        intakeExtension.setAttached(false);
+        indexerTower.setAttached(false);
+        launcher.setAttached(false);
+    }
+}
+```
+
+`XM2026` shows an intermediate case — the experimental machine has an intake and launcher but no intake extension:
+
+```java XM2026.java
+public class XM2026 extends Config {
+
+    public XM2026() {
+        super();
+        swerve.configEncoderOffsets(
+                0.1892089844 - 0.5,
+                -0.2736816406 + 0.5,
+                -0.404052734375 + 0.5,
+                -0.478759765625 + 0.5);
+
+        pilot.setAttached(true);
+        operator.setAttached(true);
+        fuelIntake.setAttached(true);
+        intakeExtension.setAttached(false);
+        launcher.setAttached(true);
+        indexerTower.setAttached(true);
+        indexerBed.setAttached(true);
+    }
+}
+```
+
+## How to add a new robot configuration
+
+<Steps>
+  <Step title="Register the RoboRIO serial number">
+    Add a new entry to the `Rio` enum in `Rio.java`. The serial number appears on the label on the back of the RoboRIO; add a leading zero as needed.
+
+    ```java Rio.java
+    FM_2026("032CABCD", true),
+    ```
+  </Step>
+
+  <Step title="Create a config class">
+    Create a new class in `frc/robot/configs/` that extends `Robot.Config`. Override encoder offsets and call `setAttached()` for each mechanism the robot carries.
+
+    ```java FM2026.java
+    public class FM2026 extends Config {
+        public FM2026() {
+            super();
+            swerve.configEncoderOffsets(-0.163818359375, 0.24902, 0.2724609375, -0.31005859375);
+            fuelIntake.setAttached(true);
+            launcher.setAttached(true);
+            // ...
+        }
+    }
+    ```
+  </Step>
+
+  <Step title="Wire the config in Robot.java">
+    Add a `case` for the new `Rio` enum value in the `switch` block inside `Robot`'s constructor.
+
+    ```java Robot.java
+    case FM_2026:
+        config = new FM2026();
+        break;
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  The RoboRIO serial number can change after reflashing the controller firmware. If a robot starts resolving to `UNKNOWN` after a reflash, re-read the serial number from `RobotController.getSerialNumber()` via the driver station console and update the `Rio` enum entry.
+</Warning>

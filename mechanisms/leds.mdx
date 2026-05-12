@@ -1,0 +1,152 @@
+---
+title: "LED subsystem and CANdle animation control"
+description: "How SpectrumLEDs manages CTRE CANdle animations, multiple strip segments via LEDBufferView, and priority-based overrides tied to robot state triggers."
+---
+
+The LED subsystem provides real-time visual feedback to drive teams and referees during a match. Spectrum's 2026 codebase uses a CTRE `CANdle` device (CAN ID 1, CANIVORE bus) to drive an RGB LED strip with 20 addressable LEDs. The implementation follows the same States-based architecture as every other subsystem: a main class (`CANdleLeds`) configures hardware, and `LedStates` declares triggers and binds animations.
+
+<Note>
+  The `CANdleLeds` and `LedStates` classes are currently scaffolded but commented out — the hardware integration is ready to be enabled when the physical CANdle is wired. The patterns shown below reflect the intended design already written in the source.
+</Note>
+
+## CANdleLeds configuration
+
+`CANdleLeds` configures the CANdle at startup:
+
+```java CANdleLeds.java
+CANdle = new CANdle(1, new CANBus(Rio.CANIVORE));
+CANdleConfig =
+        new CANdleConfiguration()
+                .withLED(
+                        new LEDConfigs()
+                                .withStripType(StripTypeValue.RGB)
+                                .withBrightnessScalar(0.5)
+                                .withLossOfSignalBehavior(
+                                        LossOfSignalBehaviorValue.DisableLEDs));
+CANdle.getConfigurator().apply(CANdleConfig);
+CANdle.setControl(
+        new SingleFadeAnimation(0, 20)
+                .withColor(new RGBWColor(156, 11, 255, 0))
+                .withFrameRate(Hertz.of(100)));
+```
+
+Key configuration choices:
+
+- **Strip type**: RGB (no white channel used)
+- **Brightness**: 50% scalar applied globally
+- **Loss-of-signal behavior**: LEDs disable if CAN communication is lost, preventing stuck animations during a brownout
+- **Default animation**: Purple single-fade at 100 Hz frame rate on startup
+
+## Multiple strip instances via LEDBufferView
+
+`SpectrumLEDs` (from SpectrumLib) supports creating multiple subsystem instances, each targeting a different `LEDBufferView` slice of the full strip. This lets you command the front strip, back strip, or any segment independently without conflicts.
+
+```java LedStates reference pattern
+// Each instance controls its own segment of the strip
+SpectrumLEDs frontStrip = new SpectrumLEDs(frontConfig);   // LEDs 0–9
+SpectrumLEDs rearStrip  = new SpectrumLEDs(rearConfig);    // LEDs 10–19
+```
+
+## Default command and mode-based animations
+
+`LedStates` calls `setupDefaultCommand()` and `bindTriggers()` from `setupDefaultCommand()` and `setupStates()` on the subsystem. The default command can detect the current DriverStation mode and dispatch mode-specific animations:
+
+- **Autonomous**: Alliance-color single fade
+- **Teleop** (normal shift): Alliance-color single fade, switching between blue and red based on `ShiftHelpers.isCurrentShiftBlue()`
+- **Disabled**: No command is scheduled (LEDs idle)
+
+## Trigger-based animation priorities
+
+`LedStates` declares time-based and state-based triggers and binds animations using `.onTrue(Commands.runOnce(...))`:
+
+```java LedStates.java
+public static final Trigger endgame =
+        new Trigger(() -> DriverStation.getMatchTime() <= 30).and(Util.teleop);
+
+public static final Trigger aboutToChangeShift =
+        new Trigger(
+                        () -> {
+                            double t = DriverStation.getMatchTime();
+                            return (t <= 108 && t >= 105)
+                                    || (t <= 83 && t >= 80)
+                                    || (t <= 58 && t >= 55)
+                                    || (t <= 33 && t >= 30);
+                        })
+                .and(Util.teleop);
+```
+
+| Trigger | Animation | Priority |
+|---|---|---|
+| `auto` | Alliance-color single fade | 15 |
+| `transitionShift` (140–133 s) | Alliance-color single fade | 15 |
+| `transitionAboutToEnd` (133–130 s) | Alliance-color strobe | 25 |
+| `redShift` | Red single fade | 10 |
+| `blueShift` | Blue single fade | 10 |
+| `aboutToChangeShift` | Current-alliance strobe | 25 |
+| `endgame` (≤ 30 s) | Yellow-green single fade (#CFff04) | 20 |
+
+Higher priority values take precedence. The `bothInShift` guard (`auto.or(transitionShift, endgame)`) prevents shift-color animations from running when a higher-priority animation is already active.
+
+## Creating new LED commands
+
+Follow these steps to add a new animation:
+
+<Steps>
+  <Step title="Define the animation">
+    Create a `SingleFadeAnimation`, `StrobeAnimation`, or other CTRE LED control object with the desired color and LED range.
+
+    ```java LedStates.java
+    SingleFadeAnimation hasFuelAnimation =
+            new SingleFadeAnimation(0, 20)
+                    .withSlot(0)
+                    .withColor(new RGBWColor(0, 255, 0)); // green
+    ```
+  </Step>
+  <Step title="Create a command">
+    Wrap the animation in a `Commands.runOnce` that calls `candle.setControl(...)`.
+
+    ```java LedStates.java
+    public static Command setLedsGreen() {
+        return Commands.runOnce(() -> candle.setControl(hasFuelAnimation));
+    }
+    ```
+  </Step>
+  <Step title="Declare a trigger">
+    Declare the trigger as a `public static final` variable in `LedStates` so it is accessible from `RobotStates`.
+
+    ```java LedStates.java
+    public static final Trigger hasFuel =
+            new Trigger(() -> Robot.getIndexerBed().hasFuel());
+    ```
+  </Step>
+  <Step title="Bind the trigger">
+    Call the binding inside `bindTriggers()`.
+
+    ```java LedStates.java
+    static void bindTriggers() {
+        hasFuel.onTrue(setLedsGreen());
+        // existing bindings...
+    }
+    ```
+  </Step>
+</Steps>
+
+## Binding to robot state triggers
+
+LED commands can also be driven by `RobotStates` triggers instead of time. For example, to strobe when the launcher is aiming:
+
+```java RobotStates.java (example binding)
+// Pilot presses action button → LED feedback
+Robot.pilot.getGamepad().a().onTrue(LedStates.setLedsGreen());
+```
+
+This approach keeps LED logic decoupled from mechanism logic while still responding to the same underlying state machine.
+
+<CardGroup cols={2}>
+  <Card title="CANdleLeds source" icon="lightbulb" href="https://github.com/spectrum3847/2026-Spectrum/blob/main/src/main/java/frc/robot/leds/CANdleLeds.java">
+    Hardware init, CANdle configuration, and brightness settings.
+  </Card>
+  <Card title="LedStates source" icon="code" href="https://github.com/spectrum3847/2026-Spectrum/blob/main/src/main/java/frc/robot/leds/LedStates.java">
+    All time-based and state-based triggers with animation bindings.
+  </Card>
+</CardGroup>

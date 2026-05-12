@@ -1,0 +1,302 @@
+---
+title: "Applying Java concepts to FRC robot code"
+description: "How standard Java constructs map to WPILib FRC patterns — what's used constantly, what's rarely needed, and how command chaining replaces traditional loops."
+---
+
+Java is a general-purpose language, but FRC robot programming uses only a slice of it. The command-based framework and WPILib APIs absorb much of what you would ordinarily write by hand — loops, state machines, conditional polling — so the Java you write directly sits at a higher level. Understanding which constructs you'll use constantly, which you'll use occasionally, and which WPILib replaces entirely will help you read and write robot code more efficiently.
+
+## The core pattern: command chaining replaces while loops
+
+The most important conceptual shift from standard Java to FRC code is how continuous behavior is expressed. In ordinary Java, you would write a `while` loop to repeat an action as long as a condition holds:
+
+<CodeGroup>
+
+```java Traditional while loop
+// Standard Java — blocks the thread until the condition changes
+while (stationIntaking == true) {
+    coral = true;
+    algae = false;
+}
+```
+
+```java WPILib command equivalent
+// FRC command-based — non-blocking, scheduled every 20 ms
+stationIntaking.whileTrue(
+    coral.toggleToTrue().alongWith(algae.setFalse())
+);
+```
+
+</CodeGroup>
+
+The `while` version blocks all other code from running until the condition changes — a fatal problem on a robot that needs to poll sensors, update motor outputs, and handle driver input simultaneously. The `whileTrue` version registers a command that the scheduler runs every loop iteration, then cancels automatically when the condition becomes false, without blocking anything else.
+
+This is the pattern used throughout `RobotStates.setupStates()`:
+
+```java
+// pilot.XButton held → track target every loop; released → return to IDLE
+pilot.XButton.whileTrue(applyState(State.TRACK_TARGET));
+pilot.XButton.onFalse(applyState(State.IDLE));
+
+// pilot.AButton held → unjam every loop; released → return to IDLE
+pilot.AButton.whileTrue(applyState(State.UNJAM));
+pilot.AButton.onFalse(applyState(State.IDLE));
+```
+
+## What is frequently used
+
+<AccordionGroup>
+
+  <Accordion title="If/else statements">
+
+Conditionals appear constantly in command factories, `periodic()` methods, and configuration logic. They decide which command to schedule, which subsystem behavior to activate, and how to interpret sensor data:
+
+```java
+// Choose between two commands based on a runtime condition
+pilot.RT.onTrue(
+    Commands.either(
+        applyState(State.INTAKE_FUEL),
+        Commands.none(),
+        pilot.LT.negate()  // only intake if LT is NOT also pressed
+    )
+);
+```
+
+```java
+// Inside a subsystem's periodic() — conditional telemetry
+if (getVelocity() > config.targetVelocity) {
+    Telemetry.log("Launcher/AtSpeed", true);
+} else {
+    Telemetry.log("Launcher/AtSpeed", false);
+}
+```
+
+```java
+// Robot.java — selecting config by RoboRIO serial number
+switch (Rio.id) {
+    case PHOTON2026:
+        config = new PHOTON2026();
+        break;
+    case PM_2026:
+        config = new PM2026();
+        break;
+    default:
+        config = new FM2026();
+        break;
+}
+```
+
+  </Accordion>
+
+  <Accordion title="Logic and arithmetic operators">
+
+Operators are used anywhere a calculation or decision is made — computing motor output, clamping sensor values, combining Trigger conditions:
+
+```java
+// Arithmetic: compute a speed as a fraction of max
+double output = Math.min(Math.abs(targetSpeed), 1.0);
+
+// Logic: combine two triggers with AND
+pilot.LT.and(pilot.RT).onTrue(applyState(State.LAUNCH_WITHOUT_SQUEEZE));
+
+// Comparison: check position against threshold
+if (Math.abs(currentPos - targetPos) < TOLERANCE) {
+    atTarget = true;
+}
+```
+
+Triggers compose with the same operators you use in `if` conditions:
+
+```java
+// OR
+Trigger robotInFeedZone = robotInEnemyZone.or(robotInNeutralZone);
+
+// NOT
+Trigger robotInScoreZone = robotInFeedZone.not();
+
+// AND
+Trigger bothTriggersHeld = pilot.LT.and(pilot.RT);
+```
+
+  </Accordion>
+
+  <Accordion title="Classes and objects">
+
+Every subsystem is a class. The `Robot` class instantiates each one and stores it as a static field. Other classes retrieve subsystem references via static getters:
+
+```java
+// Each subsystem is its own class
+public class FuelIntake extends SpectrumSubsystem { ... }
+public class Launcher    extends SpectrumSubsystem { ... }
+public class Hood        extends SpectrumSubsystem { ... }
+
+// Robot.java creates one object of each
+fuelIntake = new FuelIntake(config.fuelIntake);
+launcher   = new Launcher(config.launcher);
+hood       = new Hood(config.hood);
+
+// Other classes access them through static getters
+private static final Launcher launcher = Robot.getLauncher();
+```
+
+Lambda expressions are used everywhere a method accepts a `Supplier` — which is the standard way to pass live config values or sensor readings into commands:
+
+```java
+// Pass a live speed value that re-evaluates each loop
+launcher.setSpeed(() -> config.getLaunchSpeed());
+
+// Method reference shorthand
+launcher.setSpeed(config::getLaunchSpeed);
+```
+
+  </Accordion>
+
+  <Accordion title="Enums for robot states">
+
+The `State` enum defines every valid operating state of the robot. Using an enum instead of integers or strings gives compile-time safety — passing an invalid state is a compile error, not a runtime crash:
+
+```java
+public enum State {
+    IDLE,
+    INTAKE_FUEL,
+    TRACK_TARGET,
+    LAUNCH_WITH_SQUEEZE,
+    LAUNCH_WITH_SQUEEZE_WITH_NO_DELAY,
+    LAUNCH_WITHOUT_SQUEEZE,
+    CUSTOM_SPEED_TURRET_LAUNCH,
+    UNJAM,
+    FORCE_HOME,
+    COAST,
+    BRAKE,
+    TEST_INFINITE_LAUNCH,
+    TEST_IDLE;
+}
+```
+
+The `Coordinator` uses a `switch` on the current state to dispatch behavior to each subsystem:
+
+```java
+public void applyRobotState(State state) {
+    switch (state) {
+        case INTAKE_FUEL -> {
+            fuelIntake.intakeCommand();
+            launcher.idleCommand();
+        }
+        case LAUNCH_WITH_SQUEEZE -> {
+            launcher.fireCommand();
+            hood.aimCommand();
+        }
+        default -> applyIdle();
+    }
+}
+```
+
+The current applied state is also readable from anywhere for telemetry:
+
+```java
+// Robot.java robotPeriodic()
+Telemetry.log("Applied State", RobotStates.getAppliedState().toString());
+```
+
+  </Accordion>
+
+</AccordionGroup>
+
+## What is moderately used
+
+**Standard for loops** appear when iterating over a fixed collection of hardware objects or path points — for example, during autonomous path visualization:
+
+```java
+// Robot.java disabledPeriodic() — build a list of path poses
+List<Pose2d> poses = new ArrayList<>();
+for (PathPlannerPath path : pathPlannerPaths) {
+    poses.addAll(
+        path.getAllPathPoints().stream()
+            .map(point -> new Pose2d(point.position.getX(), point.position.getY(), Rotation2d.kZero))
+            .collect(Collectors.toList())
+    );
+}
+```
+
+**Stream operations** (`.stream()`, `.map()`, `.collect()`) appear in similar contexts as a functional alternative to explicit for loops, particularly when transforming collections.
+
+## What is rarely used directly
+
+<Tabs>
+  <Tab title="Raw while loops">
+
+Traditional `while` loops are almost never used for robot control because the command scheduler provides equivalent behavior without blocking. The scheduler's `robotPeriodic()` is itself an implicit while loop that runs every 20 ms — adding another `while` inside would stall the scheduler.
+
+```java
+// Do NOT do this inside robot code — blocks the scheduler
+while (!visionSensor.hasTarget()) {
+    // nothing else can run here
+}
+
+// Do this instead — non-blocking
+Trigger targetVisible = new Trigger(visionSensor::hasTarget);
+targetVisible.onTrue(launcher.aimCommand());
+```
+
+The only place a blocking loop is acceptable is initialization code that runs before the scheduler starts.
+
+  </Tab>
+  <Tab title="Raw arrays">
+
+Plain Java arrays (`int[]`, `double[]`) are infrequently used because WPILib provides typed, higher-level containers. Motor port numbers go into configuration classes, sensor data goes through subsystem methods, and collections of paths use `List<PathPlannerPath>`:
+
+```java
+// Rarely seen in Spectrum code
+int[] motorPorts = {10, 11, 12};
+
+// More typical — ports are fields in a named Config class
+public class LauncherConfig {
+    public int leftMotorPort  = 10;
+    public int rightMotorPort = 11;
+}
+```
+
+Arrays do appear implicitly — for example, the `String[] args` parameter in `main()` — but you won't write raw array manipulation in subsystem or state code.
+
+  </Tab>
+</Tabs>
+
+## Before and after: Trigger vs. polling loop
+
+Here is a concrete comparison showing how the same behavior — tracking a target while a button is held and returning to idle when released — looks with a raw polling loop versus the Trigger pattern:
+
+<CodeGroup>
+
+```java Traditional polling approach (do not use)
+// This would need to run every loop but can't coexist with other behavior
+boolean xButtonHeld = gamepad.getXButton();
+if (xButtonHeld) {
+    // Start tracking — but how do we know when to stop?
+    trackTarget();
+} else {
+    returnToIdle();
+}
+// Problem: must be called manually; no composability; no scheduler awareness
+```
+
+```java Trigger-based pattern (Spectrum approach)
+// RobotStates.java — declarative, composable, scheduler-aware
+pilot.XButton.whileTrue(applyState(State.TRACK_TARGET));
+pilot.XButton.onFalse(applyState(State.IDLE));
+
+// The scheduler handles polling, scheduling, and cancellation automatically
+```
+
+</CodeGroup>
+
+<Tip>
+When you find yourself reaching for a `while` loop in robot code, ask whether the behavior can be expressed as a Trigger binding or a command composition. In almost every case it can, and the result will be easier to read, test, and compose with other behaviors.
+</Tip>
+
+<CardGroup cols={2}>
+  <Card title="Java fundamentals" icon="code" href="/frc-basics/java-fundamentals">
+    Review the Java building blocks — variables, loops, classes, enums.
+  </Card>
+  <Card title="Command-based programming" icon="terminal" href="/frc-basics/command-based-programming">
+    Deep dive into Commands, Subsystems, Triggers, and the scheduler.
+  </Card>
+</CardGroup>

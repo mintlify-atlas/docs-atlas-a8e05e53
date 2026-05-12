@@ -1,0 +1,100 @@
+---
+title: "PID and Motion Magic tuning for TalonFX motors"
+description: "How to tune PID and Motion Magic closed-loop gains on CTRE TalonFX motors using Phoenix Tuner X and SpectrumLib's Mechanism configuration system."
+---
+
+PID (Proportional-Integral-Derivative) control is the foundation of all closed-loop motor control in Spectrum's robot — from launcher velocity to turret position. The `Mechanism` class exposes PID and Motion Magic configuration through the `Config` inner class, and Phoenix Tuner X provides live tuning without redeploying code.
+
+## PID concepts
+
+A PID controller continuously calculates an output to drive a motor toward a setpoint by minimizing the error between the target and measured value.
+
+<AccordionGroup>
+  <Accordion title="P — Proportional">
+    Responds to the **current** error. A higher `kP` produces a stronger correction but can cause overshoot and oscillation if too large.
+
+    ```
+    output += kP × error
+    ```
+
+    Start here when tuning. Increase until you get a fast response, then back off when oscillation appears.
+  </Accordion>
+  <Accordion title="I — Integral">
+    Responds to the **accumulated** error over time. Eliminates persistent steady-state error (when the mechanism stops just short of the target). Keep `kI` small — a large value causes windup and instability.
+
+    ```
+    output += kI × ∫error dt
+    ```
+  </Accordion>
+  <Accordion title="D — Derivative">
+    Responds to the **rate of change** of error. Dampens oscillation and reduces overshoot. Tune after `kP` is set.
+
+    ```
+    output += kD × (d/dt error)
+    ```
+  </Accordion>
+  <Accordion title="Motion Magic (CTRE)">
+    Motion Magic is a CTRE-specific profiled position control mode that generates a smooth velocity/acceleration trajectory to a target position. It wraps PID with feedforward and constrains motion with `cruiseVelocity` and `acceleration` limits — giving smoother, more predictable motion than raw PID position control.
+
+    The `Mechanism` class exposes `motionMagicVoltage()` and `motionMagicTorqueCurrentFOC()` command factories that use Motion Magic automatically.
+  </Accordion>
+</AccordionGroup>
+
+## Tuning process
+
+<Steps>
+  <Step title="Open Phoenix Tuner X and connect to the robot">
+    Connect your laptop to the robot's network. Open Phoenix Tuner X and select your device (TalonFX by name or CAN ID). Navigate to the **Controls** tab.
+  </Step>
+  <Step title="Set all gains to zero">
+    Start with `kP = 0`, `kI = 0`, `kD = 0`, `kS = 0`, `kV = 0`, `kA = 0`. Command the motor to a known setpoint.
+  </Step>
+  <Step title="Tune kP first">
+    Increase `kP` slowly until the mechanism moves toward the setpoint quickly. Stop when you see oscillation, then back off by ~20%.
+  </Step>
+  <Step title="Add kD to dampen oscillation">
+    If the mechanism overshoots or oscillates, increase `kD` until it settles cleanly. Too much `kD` causes sluggishness.
+  </Step>
+  <Step title="Add kI only if needed">
+    If the mechanism consistently stops short of the setpoint (steady-state error), add a small `kI`. Use `iZone` to limit windup to a small error window.
+  </Step>
+  <Step title="Set Motion Magic cruise velocity and acceleration">
+    For Motion Magic modes, set `cruiseVelocity` and `acceleration` in the `Config`. These define the profile shape — faster cruise and acceleration means quicker but potentially jerkier motion.
+  </Step>
+  <Step title="Copy gains into the Config class">
+    Once tuned, copy the final values into the mechanism's `Config` class in code and commit.
+
+    ```java java
+    config.slot0 = new Slot0Configs()
+        .withKP(0.5)
+        .withKI(0.0)
+        .withKD(0.01)
+        .withKS(0.25)
+        .withKV(0.12);
+    config.motionMagic.MotionMagicCruiseVelocity = 80;
+    config.motionMagic.MotionMagicAcceleration = 160;
+    ```
+  </Step>
+</Steps>
+
+## TuneValue utility
+
+SpectrumLib includes a `TuneValue` utility class that publishes a value to NetworkTables so it can be adjusted live from SmartDashboard or Elastic without redeploying code — useful during initial tuning sessions on hardware.
+
+```java java
+// Publish a tunable gain to NetworkTables
+TuneValue kP = new TuneValue("Launcher/kP", 0.5);
+
+// In periodic(), read the live value
+double currentKP = kP.get();
+```
+
+<Tip>
+  Use `DoubleSupplier` arguments in Mechanism command factories — this lets you pass a `TuneValue::get` reference so the command always uses the current live-tuned value rather than the value at scheduling time.
+</Tip>
+
+## Resources
+
+- [CTRE Phoenix 6 Closed-Loop Documentation](https://v6.docs.ctr-electronics.com/en/stable/docs/api-reference/device-specific/talonfx/closed-loop-requests.html)
+- [WPILib PID Controller Documentation](https://docs.wpilib.org/en/stable/docs/software/advanced-controls/controllers/pidcontroller.html)
+- [Phoenix Tuner X guide](/tools/phoenix-tuner-x)

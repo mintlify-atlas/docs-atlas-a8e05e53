@@ -1,0 +1,75 @@
+---
+title: "Spectrum 3847: FRC 2026 Robot Code"
+description: "Spectrum 3847's robot code for the 2026 REBUILT FRC season — command-based Java with swerve drive, vision targeting, and a reusable SpectrumLib library."
+---
+
+Spectrum 3847's 2026 robot code powers our competition robots for the FRC game **REBUILT**. Built on WPILib's command-based framework in Java, the codebase features a trigger-driven state machine, a reusable `SpectrumLib` library, full robot simulation, and vision-assisted pose estimation — all designed so multiple programmers can work on independent subsystems without stepping on each other.
+
+<CardGroup cols={2}>
+  <Card title="Setup & Installation" icon="wrench" href="/setup">
+    Install WPILib, clone the repo, and get the simulator running on your machine.
+  </Card>
+  <Card title="Project Structure" icon="folder-tree" href="/project-structure">
+    Understand how the codebase is organized — robot subsystems, SpectrumLib, and configs.
+  </Card>
+  <Card title="Robot Architecture" icon="robot" href="/architecture/overview">
+    Learn how subsystems, mechanisms, states, and triggers work together.
+  </Card>
+  <Card title="FRC Software Basics" icon="graduation-cap" href="/frc-basics/java-fundamentals">
+    New to FRC programming? Start here with Java and WPILib fundamentals.
+  </Card>
+  <Card title="Development Guide" icon="code" href="/conventions/code-style">
+    Code style, commits, tooling, and best practices for contributing.
+  </Card>
+  <Card title="2026 Season Specifics" icon="calendar" href="/reference/2026-season-specifics">
+    Game-specific robot states, controls layout, and vision configuration for REBUILT.
+  </Card>
+</CardGroup>
+
+## Key features
+
+<AccordionGroup>
+  <Accordion title="Mechanism base class (SpectrumLib)">
+    The `Mechanism` abstract class wraps CTRE TalonFX/Kraken motor controllers, handling leader/follower configuration, Motion Magic, velocity, torque-current, and voltage control modes. It exposes `CachedDouble` sensor values for efficient CANbus access and generates `Trigger` factories (at/above/below position or velocity) for use in command bindings.
+  </Accordion>
+  <Accordion title="Trigger-based state machine">
+    Robot behaviors are expressed as WPILib `Trigger` conditions bound to `Command` sequences — no complex `CommandGroup` nesting. High-level states (e.g., `INTAKE_FUEL`, `TURRET_TRACK_WITH_LAUNCH`) are coordinated through `Coordinator.java`, which fans out to individual subsystem state methods simultaneously.
+  </Accordion>
+  <Accordion title="Full robot simulation">
+    `RobotSim.java` wires up `IronMaple` season-specific physics — `RebuiltFuelOnFly` game piece simulation and `Arena2026Rebuilt` field environment — alongside `LinearSim`, `ArmSim`, and `RollerSim` classes from SpectrumLib for mechanism visualization in WPILib's Mechanism2D.
+  </Accordion>
+  <Accordion title="Multi-robot configuration">
+    A single codebase supports multiple physical robots (FM2026, XM2026, PM2026, AM2026) through configuration classes loaded at startup based on the RoboRIO's unique ID. Each config can mark individual mechanisms as attached or detached, preventing hardware initialization errors on robots missing certain components.
+  </Accordion>
+  <Accordion title="Vision-assisted pose estimation">
+    Limelight 4 cameras provide MegaTag1 (3D) and MegaTag2 (2D) pose estimates, fused into the swerve drivetrain's WPILib pose estimator via `addVisionMeasurement`. PhotonVision on an Orange Pi handles game-piece object detection. The 2026 REBUILT AprilTag field layout (`k2026RebuiltWelded`) is loaded for accurate localization.
+  </Accordion>
+  <Accordion title="PathPlanner autonomous">
+    Autonomous routines are built in PathPlanner with event-marker-triggered commands at waypoints. Paths and autos are stored under `src/main/deploy/pathplanner/` and are selected from SmartDashboard at match time.
+  </Accordion>
+</AccordionGroup>
+
+## Getting started quickly
+
+<Steps>
+  <Step title="Install prerequisites">
+    Download [WPILib 2026](https://github.com/wpilibsuite/allwpilib/releases/) and JDK 17 (Eclipse Temurin recommended). See the [Setup guide](/setup) for full instructions.
+  </Step>
+  <Step title="Clone and open the repo">
+    ```bash
+    git clone https://github.com/spectrum3847/2026-Spectrum.git
+    cd 2026-Spectrum
+    ```
+    Open the folder in WPILib VSCode.
+  </Step>
+  <Step title="Run in simulation">
+    Press `Ctrl+Shift+P` → type `sim` → select **WPILib: Simulate Robot Code**. Gradle will build, then launch Glass for the GUI simulator.
+  </Step>
+  <Step title="Explore the codebase">
+    Start with [Project Structure](/project-structure) to understand where things live, then read [Robot Architecture](/architecture/overview) to understand how subsystems, states, and triggers connect.
+  </Step>
+</Steps>
+
+<Note>
+  Java 17 is required. WPILib 2026 does not support Java 18 or later. Use [SDKMAN](https://sdkman.io) on macOS/Linux to manage Java versions easily.
+</Note>

@@ -1,0 +1,231 @@
+---
+title: "How the 2026 Spectrum codebase is organized"
+description: "Explore the three top-level Java packages — frc.robot, frc.spectrumLib, frc.rebuilt — and learn the subsystem folder pattern used throughout the codebase."
+---
+
+The 2026 Spectrum codebase lives under `src/main/java/frc/` and is split into three top-level packages, each with a distinct responsibility. Season-specific robot code lives in `frc.robot`, reusable library code that carries over year-to-year lives in `frc.spectrumLib`, and 2026 game-specific field geometry and targeting logic lives in `frc.rebuilt`. Understanding this separation is the fastest way to orient yourself in the codebase and know where to make a change.
+
+## Directory tree
+
+The full source tree is reproduced below in simplified form:
+
+```text
+src
+├── main
+│   ├── java
+│   │   └── frc
+│   │       ├── robot                         # Season robot code
+│   │       │   ├── auton/                    # Autonomous routines (PathPlanner)
+│   │       │   ├── configs/                  # Per-robot hardware configs (FM2026, XM2026, PM2026, AM2026)
+│   │       │   ├── swerve/                   # Swerve drive subsystem
+│   │       │   ├── vision/                   # PhotonVision + Limelight subsystem
+│   │       │   ├── launcher/                 # Fuel launcher mechanism
+│   │       │   ├── indexerTower/             # Vertical fuel indexer mechanism
+│   │       │   ├── indexerBed/               # Horizontal fuel indexer mechanism
+│   │       │   ├── fuelIntake/               # Ground intake mechanism
+│   │       │   ├── intakeExtension/          # Intake arm extension mechanism
+│   │       │   ├── hood/                     # Hood angle mechanism
+│   │       │   ├── turretRotationalPivot/    # Turret rotation mechanism
+│   │       │   ├── leds/                     # CANdle LED control
+│   │       │   ├── pilot/                    # Pilot gamepad bindings
+│   │       │   ├── operator/                 # Operator gamepad bindings
+│   │       │   ├── Robot.java                # WPILib robot entry point
+│   │       │   ├── RobotSim.java             # Simulation wiring
+│   │       │   ├── RobotStates.java          # Top-level trigger/state definitions
+│   │       │   ├── Coordinator.java          # Cross-subsystem state coordination
+│   │       │   └── State.java                # Shared state enum/constants
+│   │       ├── spectrumLib                   # Reusable year-to-year library
+│   │       │   ├── gamepads/                 # Gamepad abstraction layer
+│   │       │   ├── leds/                     # LED management utilities
+│   │       │   ├── mechanism/                # Motor and mechanism base classes
+│   │       │   ├── sim/                      # Physics simulation helpers
+│   │       │   ├── swerve/                   # Swerve utilities
+│   │       │   ├── talonFX/                  # TalonFX motor factory and wrappers
+│   │       │   ├── util/                     # Conversions, CAN IDs, crash tracking
+│   │       │   │   └── exceptions/           # Custom exception classes
+│   │       │   ├── vision/                   # Limelight helper utilities
+│   │       │   ├── CachedDouble.java         # Single-update-per-loop sensor cache
+│   │       │   ├── SpectrumRobot.java        # Base robot class
+│   │       │   ├── SpectrumSubsystem.java    # Base subsystem class
+│   │       │   └── Telemetry.java            # Telemetry registration helpers
+│   │       └── rebuilt                       # 2026 game-specific helpers
+│   │           ├── launchingMaps/            # Fuel launch angle/speed maps
+│   │           ├── offsets/                  # Home offsets and calibration data
+│   │           ├── targetFactories/          # Target factory implementations
+│   │           ├── Field.java                # 2026 field constants
+│   │           ├── FieldHelpers.java         # Field geometry utilities
+│   │           ├── ShotCalculator.java       # Ballistic shot calculation
+│   │           ├── TagProperties.java        # AprilTag property definitions
+│   │           └── Zones.java                # Field zone definitions
+│   └── deploy                                # Files deployed to RoboRIO
+│       └── pathplanner/
+│           ├── paths/                        # Individual trajectory files
+│           └── autos/                        # Autonomous routine configurations
+└── vendordeps/                               # Vendor dependency JSON files
+```
+
+## Top-level packages
+
+<AccordionGroup>
+  <Accordion title="frc.robot — season robot code" defaultOpen={true}>
+    `frc.robot` contains everything specific to the 2026 competition robot: subsystem implementations, hardware configuration classes, gamepad bindings, autonomous routines, and the top-level `Robot.java` entry point.
+
+    The package is structured around **one directory per subsystem or concern**. Each subsystem directory follows the three-file pattern described in the next section. Cross-subsystem coordination — deciding which subsystem states are active together — lives in `Coordinator.java`, while `RobotStates.java` defines the top-level `Trigger` conditions that drive those coordinator calls.
+
+    The `configs/` directory holds four robot-specific configuration classes (`FM2026`, `XM2026`, `PM2026`, `AM2026`). At startup, `Robot.java` reads the RoboRIO's unique ID and loads the matching config, so the same codebase can run on the full competition robot, the practice bot, and dev rigs without code changes.
+  </Accordion>
+
+  <Accordion title="frc.spectrumLib — reusable library">
+    `frc.spectrumLib` is Spectrum's year-to-year library — code that is not specific to any single game and is carried forward each season. It provides the `Mechanism` base class (wrapping CTRE TalonFX/Kraken motor configuration, Motion Magic, and control modes), the `SpectrumSubsystem` base class, gamepad abstraction, LED management, simulation helpers, and utility classes such as `CachedDouble` (which caps sensor reads to once per periodic loop to reduce CANbus traffic).
+
+    When contributing new robot code, prefer extending the classes in `spectrumLib` rather than duplicating logic. Changes to `spectrumLib` may affect multiple subsystems — review carefully before modifying.
+  </Accordion>
+
+  <Accordion title="frc.rebuilt — 2026 game helpers">
+    `frc.rebuilt` contains logic tied to the 2026 FRC game **REBUILT**: field geometry constants (`Field.java`, `Zones.java`), AprilTag properties for the 2026 layout (`TagProperties.java`), shot calculation (`ShotCalculator.java`), and target factory implementations used by the vision and launcher subsystems.
+
+    This package exists so that game-specific math and constants are isolated from both the reusable library code and the general robot wiring. It has no WPILib subsystem or command infrastructure — it is purely data and calculation.
+  </Accordion>
+</AccordionGroup>
+
+## Subsystem folder pattern
+
+Every mechanism-based subsystem in `frc.robot` follows a consistent three-file pattern. The `swerve/` subsystem is the most complete example, while simpler subsystems like `launcher/` and `fuelIntake/` show the minimal form.
+
+<Tabs>
+  <Tab title="Main class">
+    The main class (e.g., `Launcher.java`, `Swerve.java`, `Vision.java`) extends `SpectrumSubsystem` or the game-appropriate base class. It:
+
+    - Declares and initializes hardware (motors, sensors, cameras)
+    - Exposes public command factory methods (e.g., `runVelocity()`, `holdAngle()`)
+    - Creates `Trigger` factories from sensor readings (e.g., `atTargetVelocity()`)
+    - Calls `periodic()` to update telemetry and simulation state
+
+    ```java
+    // launcher/Launcher.java (abbreviated)
+    public class Launcher extends SpectrumSubsystem {
+        public LauncherConfig config;
+        private TalonFX topMotor, bottomMotor;
+
+        public Launcher(LauncherConfig config) {
+            super(config);
+            this.config = config;
+            // motor initialization ...
+        }
+
+        public Command runVelocity(DoubleSupplier rps) {
+            return run(() -> setVelocity(rps.getAsDouble()));
+        }
+    }
+    ```
+  </Tab>
+
+  <Tab title="Config class">
+    The config class (e.g., `SwerveConfig.java`) holds all tunable constants for the subsystem: CAN IDs, PID gains, Motion Magic parameters, gear ratios, and physical dimensions. It is instantiated once in the robot-specific config class (e.g., `FM2026.java`) and passed to the subsystem constructor.
+
+    Not every subsystem has a dedicated config class. Simpler subsystems embed their constants directly in the main class or inherit defaults from `SpectrumLib`. `swerve/` has `SwerveConfig.java`; `launcher/` and `fuelIntake/` currently do not.
+
+    ```java
+    // swerve/SwerveConfig.java (abbreviated)
+    public class SwerveConfig extends SpectrumSwerveConfig {
+        public SwerveConfig() {
+            // CTRE swerve module positions, drive/steer PIDs, etc.
+        }
+    }
+    ```
+  </Tab>
+
+  <Tab title="States class">
+    The states class (e.g., `LauncherStates.java`, `SwerveStates.java`) binds `Trigger` conditions to `Command` instances using WPILib's `Trigger.onTrue()` / `whileTrue()` / `onFalse()` API. It is called from `Coordinator.java` during robot initialization to wire up all the behavioral logic.
+
+    This separation means the "what triggers what" logic is centralized per subsystem and does not bleed into the main class or into `Robot.java`.
+
+    ```java
+    // launcher/LauncherStates.java (abbreviated)
+    public class LauncherStates {
+        Launcher launcher;
+
+        public LauncherStates(Launcher launcher) {
+            this.launcher = launcher;
+        }
+
+        public void bindTriggers(RobotStates states) {
+            states.LAUNCH.whileTrue(launcher.runVelocity(() -> launcher.config.launchVelocity));
+            states.SPIN_UP.whileTrue(launcher.runVelocity(() -> launcher.config.spinUpVelocity));
+        }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  The `vision/` subsystem splits into `Vision.java` (sensor reads and pose
+  estimation) and `VisionSystem.java` (command logic and trigger bindings),
+  with `VisionStates.java` for trigger wiring — a slight extension of the
+  standard pattern to handle the complexity of fusing multiple cameras.
+</Note>
+
+## Gradle build configuration
+
+The project uses **GradleRIO** (`edu.wpi.first.GradleRIO 2026.2.1`) as its base build plugin, which handles RoboRIO deployment, simulation tasks, and vendor dependency resolution. Three additional plugins are applied on top:
+
+<CardGroup cols={3}>
+  <Card title="Spotless" icon="paintbrush" href="https://github.com/diffplug/spotless">
+    Runs automatically before every `compileJava`. Enforces Google AOSP Java formatting (`googleJavaFormat 1.15.0`), removes unused imports, trims trailing whitespace, and formats Gradle and XML files. You do not need to run a formatter manually.
+  </Card>
+  <Card title="SpotBugs" icon="bug" href="https://spotbugs.github.io">
+    Static analysis that catches common Java bugs — using `=` instead of `==` in conditionals, null dereferences, and similar issues. Reports are written to `build/reports/spotbugs.html`. Failures block the build by default.
+  </Card>
+  <Card title="Lombok" icon="wand-magic-sparkles" href="https://projectlombok.org">
+    Annotation processor (`io.freefair.lombok 9.1.0`) that generates boilerplate getter/setter methods at compile time. Reduces repetitive accessor code across config and data classes.
+  </Card>
+</CardGroup>
+
+The Java source and target compatibility are pinned to `VERSION_17` in `build.gradle`:
+
+```groovy
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+```
+
+Gradle caching and parallel execution are enabled in `gradle.properties`:
+
+```properties
+org.gradle.caching=true
+org.gradle.parallel=true
+```
+
+## Autonomous paths (`src/main/deploy/pathplanner/`)
+
+PathPlanner path and auto files live under `src/main/deploy/pathplanner/` and are deployed to the RoboRIO alongside the robot code at the path `/home/lvuser/deploy/pathplanner/`.
+
+```text
+src/main/deploy/pathplanner/
+├── paths/   # Individual trajectory JSON files (e.g., "Score3NearSide.path")
+└── autos/   # Autonomous routine configurations (e.g., "3Note.auto")
+```
+
+Auto routines are selected from SmartDashboard at match time via a `SendableChooser` wired up in `auton/`. Event markers in PathPlanner trigger named commands registered in the `NamedCommands` map during robot initialization.
+
+## Vendor dependencies (`vendordeps/`)
+
+Third-party library JSON files live in `vendordeps/` at the project root. WPILib VSCode reads these to resolve the correct Maven artifacts. The 2026 robot depends on:
+
+- **CTRE Phoenix 6** — TalonFX motor controllers and swerve drive library
+- **PathPlanner** — autonomous path following
+- **PhotonLib** — vision simulation and camera interface
+
+To add a new vendor library, use the WPILib VSCode command **WPILib: Manage Vendor Libraries → Install new libraries (online)** and paste the vendor JSON URL. This updates `vendordeps/` automatically.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Robot architecture" icon="robot" href="/architecture/overview">
+    Learn how subsystems, the `Mechanism` base class, robot states, and triggers connect at runtime.
+  </Card>
+  <Card title="Development guide" icon="code" href="/conventions/code-style">
+    Code style rules, commit conventions, and best practices for contributing to the codebase.
+  </Card>
+</CardGroup>

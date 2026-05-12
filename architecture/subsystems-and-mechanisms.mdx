@@ -1,0 +1,249 @@
+---
+title: "Subsystems and mechanism base classes in SpectrumLib"
+description: "How SpectrumSubsystem and Mechanism underpin every robot component — covering motor wiring, control modes, CachedDouble sensor access, and trigger factories."
+---
+
+Every robot component in the 2026 codebase is built on two cooperating abstractions: the `SpectrumSubsystem` interface, which provides the WPILib integration contract, and the `Mechanism` abstract class, which implements that contract with TalonFX motor management, cached sensor reads, closed-loop control helpers, and position/velocity trigger factories. Together they enforce a consistent structure across every mechanism on the robot, from the fuel intake to the launcher hood.
+
+## SpectrumSubsystem
+
+`SpectrumSubsystem` is a thin interface that extends WPILib's `Subsystem`. Every subsystem in the codebase — whether it drives motors directly or just coordinates state — implements it.
+
+```java SpectrumSubsystem.java
+public interface SpectrumSubsystem extends Subsystem {
+
+    /** Bind commands to SpectrumState triggers. */
+    void setupStates();
+
+    /** Set the default command for this subsystem. */
+    void setupDefaultCommand();
+}
+```
+
+The two required methods allow `Robot` to call a uniform initialization sequence across all subsystems after construction is complete.
+
+## Mechanism
+
+`Mechanism` is the concrete base for any TalonFX-driven mechanism. It implements `SpectrumSubsystem` and centralizes motor creation, sensor caching, control mode dispatch, and trigger factories. All mechanism classes in `frc.robot` extend it.
+
+### Motor wiring: leader and followers
+
+When `isAttached()` is `true`, the constructor creates the leader `TalonFX` through `TalonFXFactory`, configures its status signal update rates, then creates any follower motors declared in the `Config`. Each follower is wired as a permanent follower of the leader and may be configured to oppose the leader's direction.
+
+```java Mechanism.java
+if (isAttached()) {
+    motor = TalonFXFactory.createConfigTalon(config.id, config.talonConfig);
+    BaseStatusSignal.setUpdateFrequencyForAll(
+            100,
+            motor.getDutyCycle(),
+            motor.getMotorVoltage(),
+            motor.getTorqueCurrent(),
+            motor.getStatorCurrent(),
+            motor.getSupplyCurrent(),
+            motor.getPosition(),
+            motor.getVelocity());
+    motor.optimizeBusUtilization();
+
+    followerMotors = new TalonFX[config.followerConfigs.length];
+    for (int i = 0; i < config.followerConfigs.length; i++) {
+        followerMotors[i] =
+                TalonFXFactory.createPermanentFollowerTalon(
+                        config.followerConfigs[i].id,
+                        motor,
+                        config.followerConfigs[i].opposeLeader);
+        followerMotors[i].optimizeBusUtilization();
+    }
+}
+```
+
+### Config injection
+
+Each mechanism subclass defines an inner `Config` that extends `Mechanism.Config`. The config carries the CAN device ID, `TalonFXConfiguration`, follower definitions, and mechanism-specific min/max rotation bounds. It is passed into the `Mechanism` constructor and stored as `public Config config`.
+
+Key fields on `Mechanism.Config`:
+
+| Field | Type | Purpose |
+|---|---|---|
+| `name` | `String` | Identifier used in telemetry and alerts |
+| `id` | `CanDeviceId` | CAN bus ID and bus name for the leader motor |
+| `attached` | `boolean` | Controls whether hardware is initialized |
+| `talonConfig` | `TalonFXConfiguration` | Full CTRE Phoenix 6 motor configuration |
+| `minRotations` / `maxRotations` | `double` | Soft travel limits for the mechanism |
+| `followerConfigs` | `FollowerConfig[]` | Follower motor IDs and opposition flags |
+
+### isAttached safety pattern
+
+`isAttached()` delegates to `config.isAttached()`. Every hardware call inside `Mechanism` is gated on this flag. When a mechanism is not attached — for example on a robot that lacks a particular subsystem — all motor commands are silently skipped and all sensor reads return `0`. This makes it safe to run the same codebase on robots with different hardware populations.
+
+<Note>
+  Never call motor methods directly in a subclass without first checking `isAttached()`. The base class methods already include this guard; bypassing them removes the safety net.
+</Note>
+
+```java Mechanism.java
+public boolean isAttached() {
+    return config.isAttached();
+}
+
+protected void stop() {
+    if (isAttached()) {
+        motor.stopMotor();
+    }
+}
+```
+
+## CachedDouble: efficient sensor access
+
+Reading a CTRE status signal over CANbus on every trigger poll would generate redundant CAN traffic and CPU overhead. `CachedDouble` solves this by wrapping a `DoubleSupplier` and computing it at most once per WPILib scheduler iteration. The cached value is cleared in `periodic()`, which the scheduler calls once per loop.
+
+```java CachedDouble.java
+public class CachedDouble extends SubsystemBase implements DoubleSupplier {
+    private boolean cached = false;
+    private double value;
+    private final DoubleSupplier source;
+
+    @Override
+    public void periodic() {
+        cached = false;
+    }
+
+    @Override
+    public double getAsDouble() {
+        if (!cached) {
+            value = source.getAsDouble();
+            cached = true;
+        }
+        return value;
+    }
+}
+```
+
+`Mechanism` instantiates a `CachedDouble` for each sensor channel at construction time:
+
+```java Mechanism.java
+cachedStatorCurrent = new CachedDouble(this::updateStatorCurrent);
+cachedSupplyCurrent = new CachedDouble(this::updateSupplyCurrent);
+cachedVoltage       = new CachedDouble(this::updateVoltage);
+cachedRotations     = new CachedDouble(this::updatePositionRotations);
+cachedPercentage    = new CachedDouble(this::updatePositionPercentage);
+cachedDegrees       = new CachedDouble(this::updatePositionDegrees);
+cachedVelocity      = new CachedDouble(this::updateVelocityRPM);
+cachedTemp          = new CachedDouble(this::updateTemp);
+```
+
+Public accessors like `getPositionRotations()`, `getVelocityRPM()`, and `getStatorCurrent()` delegate to these cached values, so any number of triggers and commands reading the same sensor within one loop cycle share a single CAN read.
+
+## Control modes
+
+`Mechanism` exposes protected helper methods for every CTRE Phoenix 6 control mode used in the codebase. Subclasses call them inside command lambdas. All methods are gated on `isAttached()` and record the commanded setpoint in the `target` field for use by trigger factories.
+
+<AccordionGroup>
+  <Accordion title="Motion Magic position — voltage">
+    `setMMPosition(DoubleSupplier rotations)` and its slot-aware overload use `MotionMagicVoltage`. This is the default position control mode for most mechanisms.
+
+    ```java Mechanism.java
+    protected void setMMPosition(DoubleSupplier rotations) {
+        setMMPosition(rotations, 0);
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Motion Magic position — torque current FOC (Pro)">
+    `setMMPositionFoc(DoubleSupplier rotations)` uses `MotionMagicTorqueCurrentFOC` for field-oriented torque control. Requires a Phoenix Pro license.
+
+    ```java Mechanism.java
+    protected void setMMPositionFoc(DoubleSupplier rotations) {
+        if (isAttached()) {
+            target = rotations.getAsDouble();
+            MotionMagicTorqueCurrentFOC mm = config.mmPositionFOC.withPosition(target);
+            motor.setControl(mm);
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Dynamic Motion Magic position — voltage and FOC">
+    `setDynMMPositionVoltage` and `setDynMMPositionFoc` accept velocity, acceleration, and jerk parameters at runtime, allowing the trajectory constraints to change per-command.
+
+    ```java Mechanism.java
+    protected void setDynMMPositionFoc(
+            DoubleSupplier rotations,
+            DoubleSupplier velocity,
+            DoubleSupplier acceleration,
+            DoubleSupplier jerk) {
+        if (isAttached()) {
+            target = rotations.getAsDouble();
+            DynamicMotionMagicTorqueCurrentFOC mm =
+                    config.dynamicMMPositionFOC
+                            .withPosition(target)
+                            .withVelocity(velocity.getAsDouble())
+                            .withAcceleration(acceleration.getAsDouble())
+                            .withJerk(jerk.getAsDouble());
+            motor.setControl(mm);
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Motion Magic velocity — voltage and FOC">
+    `setMMVelocityFOC(DoubleSupplier velocityRPS)` uses `MotionMagicVelocityTorqueCurrentFOC`. A voltage variant is also available via the `mmVelocityVoltage` control object on `Config`.
+
+    ```java Mechanism.java
+    protected void setMMVelocityFOC(DoubleSupplier velocityRPS) {
+        if (isAttached()) {
+            target = velocityRPS.getAsDouble();
+            MotionMagicVelocityTorqueCurrentFOC mm = config.mmVelocityFOC.withVelocity(target);
+            motor.setControl(mm);
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Closed-loop velocity — voltage and torque current FOC">
+    `setVelocity(DoubleSupplier velocityRPS)` uses `VelocityVoltage`. `setVelocityTorqueCurrentFOC` and `setVelocityTCFOCrpm` use `VelocityTorqueCurrentFOC`, with the RPM variant converting units automatically via `Conversions.RPMtoRPS`.
+  </Accordion>
+
+  <Accordion title="Open-loop — voltage out and duty cycle">
+    `VoltageOut` and `DutyCycleOut` control objects are available on `Config` as `voltageControl` and `percentOutput`. Subclasses apply them directly via `motor.setControl(...)` for open-loop scenarios.
+  </Accordion>
+
+  <Accordion title="Torque current FOC">
+    `TorqueCurrentFOC` is available on `Config` as `torqueCurrentFOC` for direct torque-current open-loop control. Requires Phoenix Pro.
+  </Accordion>
+</AccordionGroup>
+
+## Trigger factories
+
+`Mechanism` provides trigger factory methods for every sensor domain it caches. Triggers compose directly with WPILib's command-binding API and drive the state machine in each subsystem's `setupStates()` method.
+
+### Position triggers
+
+| Method | Condition |
+|---|---|
+| `atRotations(target, tolerance)` | position within ± tolerance of target |
+| `belowRotations(target, tolerance)` | position below target + tolerance |
+| `aboveRotations(target, tolerance)` | position above target − tolerance |
+| `atPercentage(target, tolerance)` | same family, percentage units |
+| `belowPercentage` / `abovePercentage` | percentage bounds |
+| `atDegrees(target, tolerance)` | same family, degree units |
+| `belowDegrees` / `aboveDegrees` | degree bounds |
+| `atTargetPosition(tolerance)` | position within tolerance of last commanded `target` |
+
+### Velocity triggers
+
+| Method | Condition |
+|---|---|
+| `atVelocityRPM(target, tolerance)` | velocity within ± tolerance |
+| `belowVelocityRPM(target, tolerance)` | velocity below target + tolerance |
+| `aboveVelocityRPM(target, tolerance)` | velocity above target − tolerance |
+
+### Current triggers
+
+| Method | Condition |
+|---|---|
+| `atCurrent(target, tolerance)` | stator current within ± tolerance |
+| `belowCurrent(target, tolerance)` | current below target + tolerance |
+| `aboveCurrent(target, tolerance)` | current above target − tolerance |
+
+<Tip>
+  All trigger factories accept `DoubleSupplier` arguments, so thresholds can be tunable constants, dashboard-backed values, or computed expressions rather than compile-time literals.
+</Tip>

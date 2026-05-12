@@ -1,0 +1,128 @@
+---
+title: "Set up the 2026 Spectrum development environment"
+description: "Install WPILib 2026, JDK 17, Git, and PathPlanner, then clone the 2026 Spectrum repo, open it in WPILib VSCode, and launch the robot simulator."
+---
+
+Getting the 2026 Spectrum codebase running locally requires four tools: WPILib (which bundles its own VSCode, Gradle, and Java toolchain), a standalone JDK 17 for the build, Git to clone the repository, and PathPlanner for editing and previewing autonomous routines. Follow the steps below in order — the simulator should be running in under fifteen minutes on a fresh machine.
+
+## Prerequisites
+
+Before you begin, make sure you have the following installed:
+
+- **WPILib 2026** — bundles VSCode, Gradle, and the FRC toolchain. Download the latest 2026 stable release from [GitHub releases](https://github.com/wpilibsuite/allwpilib/releases/).
+- **JDK 17 (Eclipse Temurin)** — WPILib 2026 requires exactly Java 17; Java 18 or later is not supported. Download from [Adoptium](https://adoptium.net/temurin/releases?version=17).
+- **Git** — for cloning and version control. Download from [git-scm.com](https://git-scm.com/).
+- **PathPlanner** — for viewing and editing autonomous paths. Download from [pathplanner.dev](https://pathplanner.dev).
+
+<Warning>
+  WPILib 2026 does not support Java 18 or later. You must use JDK 17. Using any
+  higher version will cause build failures.
+</Warning>
+
+## Installation steps
+
+<Steps>
+  <Step title="Install WPILib 2026">
+    Download the WPILib 2026 installer for your operating system from the [allwpilib GitHub releases](https://github.com/wpilibsuite/allwpilib/releases/) page. Run the installer and follow the prompts — it installs WPILib VSCode, the FRC Gradle plugin, and all required native libraries.
+
+    <Note>
+      The WPILib installer includes its own bundled JDK, but the robot build system
+      also reads the system `JAVA_HOME`. Set `JAVA_HOME` to your JDK 17 installation
+      to avoid version conflicts.
+    </Note>
+  </Step>
+
+  <Step title="Install JDK 17">
+    Download and install [Eclipse Temurin 17](https://adoptium.net/temurin/releases?version=17) for your platform.
+
+    <Tip>
+      On macOS or Linux, use [SDKMAN](https://sdkman.io) to manage multiple Java
+      versions without conflicts. After installing SDKMAN, run:
+
+      ```bash
+      sdk install java 17.0.18-tem
+      sdk use java 17.0.18-tem
+      ```
+
+      SDKMAN sets `JAVA_HOME` automatically for the active shell session.
+    </Tip>
+
+    On Windows, set the `JAVA_HOME` environment variable to your JDK 17 install directory after installation (e.g., `C:\Program Files\Eclipse Adoptium\jdk-17.0.18.7-hotspot`).
+  </Step>
+
+  <Step title="Clone the repository">
+    Open a terminal, navigate to the directory where you want the project, and run:
+
+    ```bash
+    git clone https://github.com/spectrum3847/2026-Spectrum.git
+    cd 2026-Spectrum
+    ```
+
+    This creates a local copy of the full repository including all history.
+
+    <Note>
+      Prefer a GUI? [GitHub Desktop](https://desktop.github.com/download/) works
+      well on Windows and macOS. Linux users can use the [Flatpak
+      build](https://flathub.org/en/apps/io.github.shiftey.Desktop).
+    </Note>
+  </Step>
+
+  <Step title="Open the project in WPILib VSCode">
+    Launch **WPILib VSCode** (not a system-installed VSCode — the WPILib installer places a separate shortcut). Use **File → Open Folder** and select the `2026-Spectrum` directory you just cloned.
+
+    Gradle will automatically download vendor dependencies (CTRE Phoenix 6, PathPlanner, PhotonLib) on the first open. This may take a few minutes depending on your connection.
+  </Step>
+
+  <Step title="Run the robot simulator">
+    With the project open in WPILib VSCode:
+
+    1. Press `Ctrl+Shift+P` to open the command palette.
+    2. Type `sim` and select **WPILib: Simulate Robot Code**.
+    3. Gradle will build the project. Wait for the build to complete.
+    4. When prompted, click **GUI Sim** to launch **Glass** — the WPILib graphical simulator.
+
+    ```bash
+    # Alternatively, run the simulation from the terminal:
+    ./gradlew simulateJava
+    ```
+
+    Glass opens with the simulated robot field, NetworkTables viewer, and joystick inputs. You can connect a simulated driver station from the same prompt.
+  </Step>
+
+  <Step title="Install PathPlanner">
+    Download and install [PathPlanner](https://pathplanner.dev) for your operating system. Open PathPlanner, then open the `2026-Spectrum` project folder. PathPlanner automatically detects the `src/main/deploy/pathplanner/` directory where all autonomous paths and routines are stored.
+  </Step>
+</Steps>
+
+## Verifying your setup
+
+After completing the steps above, confirm that everything is working:
+
+<AccordionGroup>
+  <Accordion title="Build succeeds without errors">
+    In the WPILib VSCode terminal, run:
+
+    ```bash
+    ./gradlew build
+    ```
+
+    A `BUILD SUCCESSFUL` message confirms the Java compilation, Spotless formatting check, and SpotBugs static analysis all passed.
+  </Accordion>
+  <Accordion title="Simulator launches Glass">
+    After running **WPILib: Simulate Robot Code** and selecting **GUI Sim**, the Glass window should open. The NetworkTables panel should show entries from the robot subsystems populating in real time.
+  </Accordion>
+  <Accordion title="PathPlanner finds the project">
+    Open PathPlanner and select **Open Robot Project**. Navigate to the `2026-Spectrum` folder. PathPlanner should load the paths from `src/main/deploy/pathplanner/paths/` and the auto routines from `src/main/deploy/pathplanner/autos/`.
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Project structure" icon="folder-tree" href="/project-structure">
+    Learn how the codebase is organized across the three Java packages and understand the subsystem folder pattern.
+  </Card>
+  <Card title="Robot architecture" icon="robot" href="/architecture/overview">
+    Understand how subsystems, mechanisms, robot states, and triggers connect at runtime.
+  </Card>
+</CardGroup>

@@ -1,0 +1,108 @@
+---
+title: "Git workflow: commits, branches, and pull requests"
+description: "Spectrum's Git conventions for feature branches, commit messages, pull request reviews, and the sim-first development flow for the 2026 REBUILT season."
+---
+
+Spectrum uses a feature-branch Git workflow where all new work is developed on isolated branches, tested in simulation first, and merged into `main` only after passing a code review. This keeps the main branch buildable at all times — a broken `main` means a broken robot for the whole team.
+
+## Feature branch workflow
+
+<Steps>
+  <Step title="Create a feature branch">
+    Branch off `main` for every new feature or significant change. Name branches descriptively.
+
+    ```bash
+    git checkout main
+    git pull origin main
+    git checkout -b feature/launcher-velocity-tuning
+    ```
+  </Step>
+  <Step title="Develop and test in simulation">
+    Write your code and validate it in WPILib simulation before touching hardware. Use AdvantageScope to replay logs and verify behavior. Catch logic errors early — sim is free, robot time is not.
+  </Step>
+  <Step title="Keep your branch up to date">
+    Regularly pull `main` into your feature branch to avoid large merge conflicts when you eventually open a PR.
+
+    ```bash
+    # GitHub Desktop: Branch → Update from Main
+    # CLI:
+    git pull origin main
+    # or for a cleaner history:
+    git pull --rebase origin main
+    ```
+  </Step>
+  <Step title="Verify the build passes">
+    Before opening a PR, confirm your branch builds cleanly. A non-building branch **will break robot code for everyone** if merged.
+
+    ```bash
+    ./gradlew clean build
+    ```
+  </Step>
+  <Step title="Open a pull request and request review">
+    Push your branch and open a PR on GitHub. Request review from a programming lead or the person you collaborated with. Do not merge without approval.
+  </Step>
+  <Step title="Test on hardware (if needed)">
+    After the PR is reviewed and sim testing passes, test on the physical robot only for changes that require real-world feedback (tuning, calibration, sensor verification).
+  </Step>
+</Steps>
+
+## Writing good commit messages
+
+Commits are a record of *why* changes were made, not just what changed. Future-you (and teammates) will read these during debugging.
+
+<AccordionGroup>
+  <Accordion title="Keep the summary line concise">
+    The first line should be a short summary (under 72 characters) written in the imperative mood.
+
+    ```
+    Good: Add velocity fallback when launcher encoder disconnects
+    Good: Fix swerve neutral zone trigger boundary coordinates
+    Bad:  fixed stuff
+    Bad:  I changed the launcher code to add a new feature
+    ```
+  </Accordion>
+  <Accordion title="Add a body for complex changes">
+    For large refactors or non-obvious decisions, follow the summary with a blank line and a body explaining the rationale.
+
+    ```
+    Refactor Coordinator to use enum dispatch
+
+    Previously each state required a long if-else chain. Switching to
+    enum dispatch makes adding new states O(1) and eliminates the risk
+    of missing a case. No behavior change.
+    ```
+  </Accordion>
+  <Accordion title="When detailed messages matter most">
+    Detailed commit bodies are most valuable for:
+    - Large architectural changes across multiple files
+    - Non-obvious tradeoffs or algorithm choices
+    - Changes that affect multiple robots or configurations
+
+    For minor formatting fixes or one-line changes, a short summary is enough.
+  </Accordion>
+</AccordionGroup>
+
+## Pull request checklist
+
+Before marking a PR ready for review:
+
+- [ ] Branch is up to date with `main` (`git pull origin main`)
+- [ ] `./gradlew clean build` passes with no errors
+- [ ] Simulation testing completed for changed behavior
+- [ ] No merge conflicts
+- [ ] Code follows [style conventions](/conventions/code-style)
+- [ ] New mechanisms or states are documented in code comments
+
+<Warning>
+  **Never merge a PR if CI fails.** A non-building `main` breaks robot code for the entire team and can cost match time at competition.
+</Warning>
+
+## Resolving merge conflicts
+
+When `main` has diverged from your branch, Git will flag conflicts. Resolve them file by file:
+
+- **Keep incoming**: Accept changes from `main` (the other person's version)
+- **Keep current**: Accept your own changes
+- **Merge both**: Manually combine both sets of changes
+
+After resolving, run `./gradlew build` again to confirm nothing broke during the merge.
